@@ -440,6 +440,38 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn atomic_write_over_readonly_file_succeeds() {
+        let root = temp_dir("safe-file-readonly-target");
+        let target = root.join("readonly.txt");
+        fs::write(&target, b"before").expect("seed write should work");
+
+        let mut perms = fs::metadata(&target)
+            .expect("metadata should work")
+            .permissions();
+        perms.set_readonly(true);
+        fs::set_permissions(&target, perms).expect("set readonly should work");
+
+        let ops = LocalSafeFileOps::default();
+        let result = ops.atomic_write(&target, b"after");
+
+        if target.exists()
+            && let Ok(meta) = fs::metadata(&target)
+        {
+            let mut reset = meta.permissions();
+            #[allow(clippy::permissions_set_readonly_false)]
+            reset.set_readonly(false);
+            let _ = fs::set_permissions(&target, reset);
+        }
+
+        assert!(result.is_ok(), "atomic write should handle readonly files");
+        assert_eq!(
+            fs::read(&target).expect("read after atomic write should work"),
+            b"after"
+        );
+    }
+
     #[test]
     fn atomic_replace_path_rejects_path_without_parent() {
         let err = LocalSafeFileOps::atomic_replace_path(Path::new(""))

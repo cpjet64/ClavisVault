@@ -259,6 +259,25 @@ mod tests {
         assert!(output.contains("- `OPENAI_API_KEY` – OpenAI token"));
     }
 
+    #[test]
+    fn build_managed_section_uses_entry_name_in_output() {
+        let mut keys = HashMap::new();
+        keys.insert(
+            "MAP_KEY_ONLY".to_string(),
+            KeyEntry {
+                name: "ENTRY_NAME".to_string(),
+                description: "desc".to_string(),
+                secret: None,
+                tags: vec![],
+                last_updated: Utc::now(),
+            },
+        );
+
+        let output = build_managed_section(&keys, Utc::now());
+        assert!(output.contains("- `ENTRY_NAME` – desc"));
+        assert!(!output.contains("MAP_KEY_ONLY"));
+    }
+
     #[derive(Clone)]
     struct FailingAtomicWriteFileOps {
         inner: LocalSafeFileOps,
