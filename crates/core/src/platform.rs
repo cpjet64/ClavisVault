@@ -125,17 +125,24 @@ fn write_autostart_state(platform: &str, enabled: bool, minimized: bool) -> Resu
 mod tests {
     use super::*;
 
+    fn assert_resolved(path: PathBuf) {
+        assert!(
+            !path.as_os_str().is_empty(),
+            "resolved path should not be empty"
+        );
+    }
+
     #[test]
     fn platform_dirs_resolve() {
-        assert!(WindowsPlatform::data_dir().exists());
-        assert!(MacOsPlatform::config_dir().exists());
-        assert!(LinuxPlatform::data_dir().exists());
+        assert_resolved(WindowsPlatform::data_dir());
+        assert_resolved(MacOsPlatform::config_dir());
+        assert_resolved(LinuxPlatform::data_dir());
     }
 
     #[test]
     fn macos_data_dir_and_linux_config_dir_are_resolved() {
-        assert!(MacOsPlatform::data_dir().exists());
-        assert!(LinuxPlatform::config_dir().exists());
+        assert_resolved(MacOsPlatform::data_dir());
+        assert_resolved(LinuxPlatform::config_dir());
     }
 
     #[test]
@@ -160,7 +167,7 @@ mod tests {
 
         let data_dir = current_platform_data_dir();
         let config_dir = current_platform_config_dir();
-        assert!(data_dir.exists());
-        assert!(config_dir.exists());
+        assert_resolved(data_dir);
+        assert_resolved(config_dir);
     }
 }

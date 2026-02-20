@@ -8,6 +8,20 @@ expiry = "2026-12-31"
 rationale = "Transitive through GTK3-era desktop dependencies; waiting on upstream replacement path."
 
 [[advisories]]
+id = "RUSTSEC-2024-0384"
+package = "instant"
+kind = "unmaintained"
+expiry = "2026-12-31"
+rationale = "Transitive through tauri/wry ecosystem crates; replacement is blocked on upstream dependency refreshes."
+
+[[advisories]]
+id = "RUSTSEC-2024-0388"
+package = "derivative"
+kind = "unmaintained"
+expiry = "2026-12-31"
+rationale = "Transitive derive helper dependency; no direct top-level usage and awaiting upstream migration path."
+
+[[advisories]]
 id = "RUSTSEC-2024-0411"
 package = "gdkwayland-sys"
 kind = "unmaintained"

@@ -438,18 +438,20 @@ fn parse_auth_only_options(options: &[String], command_name: &str) -> Result<Aut
 
 fn parse_shell_kind(value: &str) -> Result<ShellKind> {
     let trimmed = value.trim();
-    let normalized = Path::new(trimmed)
-        .file_name()
-        .and_then(|name| name.to_str())
+    // Normalize both POSIX and Windows-style shell paths regardless of host OS.
+    let basename = trimmed
+        .rsplit(['/', '\\'])
+        .next()
         .unwrap_or(trimmed)
-        .trim_end_matches(".exe")
-        .to_ascii_lowercase();
+        .trim();
+    let normalized = basename.to_ascii_lowercase();
+    let normalized = normalized.strip_suffix(".exe").unwrap_or(&normalized);
 
     if normalized.is_empty() {
         bail!("unsupported shell: {value}");
     }
 
-    match normalized.as_str() {
+    match normalized {
         "bash" => Ok(ShellKind::Bash),
         "zsh" => Ok(ShellKind::Zsh),
         "fish" => Ok(ShellKind::Fish),
