@@ -2273,8 +2273,7 @@ message: "Optional update"
         assert!(result.is_err());
         assert!(
             result
-                .err()
-                .expect("error expected")
+                .expect_err("error expected")
                 .to_string()
                 .contains("missing encrypted vault payload")
         );
