@@ -333,6 +333,21 @@ mod tests {
         assert!(bytes.is_empty());
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn backup_with_reserved_filename_reports_empty_file_error() {
+        let root = temp_dir("safe-file-reserved-backup");
+        let target = root.join("invalid|filename");
+        let ops = LocalSafeFileOps::default();
+
+        let err = ops.backup(&target);
+        assert!(err.is_err());
+        assert!(err
+            .unwrap_err()
+            .to_string()
+            .contains("failed to create empty backup"));
+    }
+
     #[test]
     fn backup_of_directory_returns_error() {
         let root = temp_dir("safe-file-copy-error");

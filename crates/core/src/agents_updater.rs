@@ -234,6 +234,25 @@ mod tests {
         );
     }
 
+    #[test]
+    fn build_managed_section_formats_key_rows() {
+        let mut keys = key_map();
+        keys.insert(
+            "AZURE_SECRET".to_string(),
+            KeyEntry {
+                name: "AZURE_SECRET".to_string(),
+                description: "az".to_string(),
+                secret: None,
+                tags: vec!["cloud".to_string()],
+                last_updated: Utc::now(),
+            },
+        );
+
+        let output = build_managed_section(&keys, Utc::now());
+        assert!(output.contains("- `OPENAI_API_KEY` – OpenAI token"));
+        assert!(output.contains("- `AZURE_SECRET` – az"));
+    }
+
     #[derive(Clone)]
     struct FailingAtomicWriteFileOps {
         inner: LocalSafeFileOps,
