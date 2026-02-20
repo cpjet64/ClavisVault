@@ -581,6 +581,7 @@ fn verify_or_pair(
     state: &mut ServerStateFile,
     token: Option<&str>,
     pairing_code: Option<&str>,
+    password: Option<&str>,
 ) -> Result<Option<String>> {
     if let Some(token) = token {
         verify_token(state, token)?;
@@ -602,6 +603,16 @@ fn verify_or_pair(
     let expected = format!("{}-{}", challenge.code, challenge.checksum);
     if pairing_code != expected {
         bail!("pairing code mismatch");
+    }
+
+    if let Some(record) = state.password.as_ref() {
+        let provided_password = password.ok_or_else(|| anyhow!("server password required"))?;
+        let key = derive_master_key(provided_password, &record.salt)
+            .with_context(|| "failed verifying server password")?;
+        let digest = hex_of(Sha256::digest(key.as_slice()).as_ref());
+        if record.digest_hex != digest {
+            bail!("invalid server password");
+        }
     }
 
     let issued = issue_signed_jwt_token(state)?;
@@ -695,6 +706,7 @@ fn handle_vault_push(
         state,
         request.token.as_deref(),
         request.pairing_code.as_deref(),
+        request.password.as_deref(),
     )?;
 
     let client_fingerprint = request.client_fingerprint.clone().ok_or_else(|| {
@@ -1151,12 +1163,107 @@ mod tests {
         let challenge = ensure_pairing_challenge(&mut state);
         let code = format!("{}-{}", challenge.code, challenge.checksum);
 
-        let first = verify_or_pair(&mut state, None, Some(&code));
+        let first = verify_or_pair(&mut state, None, Some(&code), None);
         assert!(first.is_ok());
         assert!(state.pairing.is_none());
 
-        let second = verify_or_pair(&mut state, None, Some(&code));
+        let second = verify_or_pair(&mut state, None, Some(&code), None);
         assert!(second.is_err());
+    }
+
+    #[test]
+    fn pairing_without_password_is_rejected_when_password_is_configured() {
+        let mut state = ServerStateFile::default();
+        let mut salt = [0_u8; 16];
+        rand::rngs::OsRng.fill_bytes(&mut salt);
+        let key = derive_master_key("pairing-password", &salt)
+            .expect("derive password key should work");
+        state.password = Some(PasswordRecord {
+            salt,
+            digest_hex: hex_of(Sha256::digest(key.as_slice()).as_ref()),
+        });
+
+        let challenge = ensure_pairing_challenge(&mut state);
+        let code = format!("{}-{}", challenge.code, challenge.checksum);
+        let result = verify_or_pair(&mut state, None, Some(&code), None);
+        assert!(result.is_err());
+        assert!(state.pairing.is_some());
+    }
+
+    #[test]
+    fn pairing_with_correct_password_succeeds() {
+        let mut state = ServerStateFile::default();
+        let mut salt = [0_u8; 16];
+        rand::rngs::OsRng.fill_bytes(&mut salt);
+        let password = "pairing-password";
+        let key = derive_master_key(password, &salt).expect("derive password key should work");
+        state.password = Some(PasswordRecord {
+            salt,
+            digest_hex: hex_of(Sha256::digest(key.as_slice()).as_ref()),
+        });
+
+        let challenge = ensure_pairing_challenge(&mut state);
+        let code = format!("{}-{}", challenge.code, challenge.checksum);
+        let result = verify_or_pair(&mut state, None, Some(&code), Some(password));
+        assert!(matches!(result, Ok(Some(_))));
+        assert!(state.pairing.is_none());
+    }
+
+    #[test]
+    fn token_flow_remains_valid_without_password_after_pairing() {
+        let root = temp_dir("token-after-pairing");
+        let paths = sample_paths(&root);
+        let mut state = ServerStateFile::default();
+        let mut salt = [0_u8; 16];
+        rand::rngs::OsRng.fill_bytes(&mut salt);
+        let password = "pairing-password";
+        let key = derive_master_key(password, &salt)
+            .expect("derive password key should work");
+        let encrypted = lock_vault(paths.vault_file.clone(), &VaultData::new(salt), &key)
+            .expect("vault encryption should work");
+        let encrypted_vault = encrypted
+            .to_bytes()
+            .expect("vault bytes should serialize");
+        state.password = Some(PasswordRecord {
+            salt,
+            digest_hex: hex_of(Sha256::digest(key.as_slice()).as_ref()),
+        });
+        let challenge = ensure_pairing_challenge(&mut state);
+
+        let pair_request = PushRequest {
+            token: None,
+            pairing_code: Some(format!("{}-{}", challenge.code, challenge.checksum)),
+            password: Some(password.to_string()),
+            client_fingerprint: Some("fp-token".to_string()),
+            server_fingerprint: None,
+            command: None,
+            reason: None,
+            encrypted_vault_hex: hex_of(&encrypted_vault),
+        };
+        let pair_response =
+            handle_vault_push(&paths, &mut state, pair_request).expect("pairing should work");
+        let issued_token = pair_response
+            .issued_token
+            .expect("pairing should return token")
+            .to_string();
+
+        let token_request = PushRequest {
+            token: Some(issued_token),
+            pairing_code: None,
+            password: None,
+            client_fingerprint: Some("fp-token".to_string()),
+            server_fingerprint: Some(
+                state
+                    .bound_server_fingerprint
+                    .clone()
+                    .expect("pairing should bind server fingerprint"),
+            ),
+            command: None,
+            reason: None,
+            encrypted_vault_hex: hex_of(&encrypted_vault),
+        };
+
+        assert!(handle_vault_push(&paths, &mut state, token_request).is_ok());
     }
 
     #[test]
@@ -1233,7 +1340,7 @@ mod tests {
     }
 
     #[test]
-    fn pairing_can_issue_token_without_password_field() {
+    fn pairing_can_issue_token_with_password() {
         let root = temp_dir("pair-without-password");
         let paths = sample_paths(&root);
         let mut state = ServerStateFile::default();
@@ -1253,7 +1360,7 @@ mod tests {
         let request = PushRequest {
             token: None,
             pairing_code: Some(format!("{}-{}", challenge.code, challenge.checksum)),
-            password: None,
+            password: Some("pw-test-123".to_string()),
             client_fingerprint: Some("f1".to_string()),
             server_fingerprint: None,
             command: None,
