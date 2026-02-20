@@ -479,11 +479,9 @@ mod tests {
         assert!(err.to_string().contains("path has no parent"));
     }
 
-    #[test]
     #[cfg(unix)]
     #[test]
     fn atomic_replace_path_rejects_path_without_filename() {
-        let root = temp_dir("safe-file-no-filename");
         let path = Path::new("/");
         let err = LocalSafeFileOps::atomic_replace_path(path)
             .expect_err("atomic replace path should fail without filename");
