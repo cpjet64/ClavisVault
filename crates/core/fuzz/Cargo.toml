@@ -1,0 +1,46 @@
+[package]
+name = "clavisvault-core-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+chrono = { version = "0.4", features = ["clock"] }
+
+[dependencies.clavisvault-core]
+path = ".."
+
+[[bin]]
+name = "vault_blob_parser"
+path = "fuzz_targets/vault_blob_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "agents_guarded_section"
+path = "fuzz_targets/agents_guarded_section.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "vault_crypto_roundtrip"
+path = "fuzz_targets/vault_crypto_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "session_invariants"
+path = "fuzz_targets/session_invariants.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]

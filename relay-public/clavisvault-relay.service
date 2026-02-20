@@ -1,0 +1,16 @@
+[Unit]
+Description=ClavisVault Relay Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=clavisvault
+Group=clavisvault
+ExecStart=/usr/local/bin/clavisvault-relay
+Restart=always
+RestartSec=2
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,61 @@
+@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --surface: 12 17 24;
+  --panel: 23 29 37;
+  --accent: 249 178 90;
+  --text: 235 240 248;
+  color-scheme: dark;
+}
+
+:root[data-accent="mint"] {
+  --accent: 112 230 176;
+}
+
+:root[data-accent="amber"] {
+  --accent: 244 195 89;
+}
+
+:root[data-accent="steel"] {
+  --accent: 141 191 223;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Space Grotesk", "Segoe UI", sans-serif;
+  color: rgb(var(--text));
+  background:
+    radial-gradient(circle at 8% 10%, rgba(249, 178, 90, 0.18), transparent 34%),
+    radial-gradient(circle at 92% 88%, rgba(45, 120, 181, 0.22), transparent 38%),
+    linear-gradient(130deg, #090c12 0%, #11151d 46%, #090c12 100%);
+}
+
+pre,
+code,
+.font-mono {
+  font-family: "IBM Plex Mono", "Consolas", monospace;
+}
+
+.app-shell {
+  animation: app-fade 320ms ease-out;
+}
+
+@keyframes app-fade {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

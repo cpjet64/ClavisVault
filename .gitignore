@@ -1,0 +1,93 @@
+# ------------------------------
+# Rust / Cargo
+# ------------------------------
+target/
+**/target/
+*.rs.bk
+
+# Keep Cargo.lock tracked for application/workspace reproducibility.
+
+# ------------------------------
+# Tauri / Frontend toolchains
+# ------------------------------
+node_modules/
+**/node_modules/
+.pnpm-store/
+.npm/
+.yarn/
+
+dist/
+build/
+**/dist/
+**/build/
+**/.vite/
+**/.turbo/
+**/.parcel-cache/
+
+# Tauri generated/build output
+src-tauri/target/
+src-tauri/gen/
+
+# ------------------------------
+# Tests / Coverage / Fuzzing
+# ------------------------------
+coverage/
+*.lcov
+lcov.info
+cobertura.xml
+tarpaulin-report.html
+tarpaulin-report.xml
+fuzz/artifacts/
+fuzz/coverage/
+
+# ------------------------------
+# Logs / runtime temp files
+# ------------------------------
+*.log
+*.tmp
+*.temp
+*.pid
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ------------------------------
+# Secrets / local env state
+# ------------------------------
+.env
+.env.*
+!.env.example
+*.local
+*.secret
+*.secrets
+*.vault
+*.vault.bak
+
+# ------------------------------
+# IDE / Editor
+# ------------------------------
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+*.iml
+
+# Visual Studio / Rider (Windows)
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.VC.db
+
+# ------------------------------
+# OS files
+# ------------------------------
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ------------------------------
+# Local prompt payloads
+# ------------------------------
+prompts/

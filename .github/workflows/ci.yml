@@ -1,0 +1,167 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+jobs:
+  check:
+    name: Check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022, macos-15]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.93.1
+          components: clippy, rustfmt
+
+      - name: Install Linux desktop dependencies
+        if: ${{ runner.os == 'Linux' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libglib2.0-dev \
+            libatk1.0-dev \
+            libcairo2-dev \
+            libgdk-pixbuf2.0-dev \
+            libgtk-3-dev \
+            libpango1.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libwebkit2gtk-4.1-dev \
+            libsoup-3.0-dev
+
+      - name: Cargo check
+        run: cargo check --all
+
+      - name: Cargo clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Cargo test
+        run: cargo test --all
+
+      - name: Cargo test (desktop tauri)
+        run: cargo test --manifest-path crates/desktop/src-tauri/Cargo.toml
+
+      - name: Repository invariants
+        shell: bash
+        run: |
+          test -f CHANGELOG.md
+          if [[ -f docs/CHANGELOG.md ]]; then
+            echo "docs/CHANGELOG.md must not exist; changelog must be at repository root"
+            exit 1
+          fi
+          test -d crates/desktop/src-tauri
+          cargo test -p clavisvault-cli tests::session_token_rejects_legacy_plaintext_format
+          cargo test -p clavisvault-cli tests::shell_session_export_snippets_handle_shell_specific_quotes
+
+  coverage:
+    name: Coverage (core >=95%)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.93.1
+
+      - name: Install cargo-tarpaulin
+        run: cargo install cargo-tarpaulin --locked
+
+      - name: Run tarpaulin
+        run: cargo tarpaulin --config tarpaulin.toml --package clavisvault-core --lib --fail-under 95
+
+  audit:
+    name: Security audit + deny
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.93.1
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+
+      - name: Run cargo audit
+        run: |
+          cargo audit \
+            --ignore RUSTSEC-2024-0413 \
+            --ignore RUSTSEC-2024-0416 \
+            --ignore RUSTSEC-2024-0388 \
+            --ignore RUSTSEC-2025-0057 \
+            --ignore RUSTSEC-2024-0412 \
+            --ignore RUSTSEC-2024-0418 \
+            --ignore RUSTSEC-2024-0411 \
+            --ignore RUSTSEC-2024-0417 \
+            --ignore RUSTSEC-2024-0414 \
+            --ignore RUSTSEC-2024-0415 \
+            --ignore RUSTSEC-2024-0420 \
+            --ignore RUSTSEC-2024-0419 \
+            --ignore RUSTSEC-2024-0384 \
+            --ignore RUSTSEC-2024-0370 \
+            --ignore RUSTSEC-2025-0081 \
+            --ignore RUSTSEC-2025-0075 \
+            --ignore RUSTSEC-2025-0080 \
+            --ignore RUSTSEC-2025-0100 \
+            --ignore RUSTSEC-2025-0098 \
+            --ignore RUSTSEC-2024-0429
+
+      - name: Run cargo deny
+        run: cargo deny check
+
+  extreme:
+    name: Extreme test smoke
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.93.1
+          components: clippy, rustfmt
+
+      - name: Install test tooling
+        run: |
+          cargo install cargo-tarpaulin --locked
+          cargo install cargo-audit --locked
+          cargo install cargo-deny --locked
+          cargo install cargo-fuzz --locked
+          rustup toolchain install nightly --profile minimal
+
+      - name: Install Linux desktop dependencies
+        if: ${{ runner.os == 'Linux' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libglib2.0-dev \
+            libatk1.0-dev \
+            libcairo2-dev \
+            libgdk-pixbuf2.0-dev \
+            libgtk-3-dev \
+            libpango1.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libwebkit2gtk-4.1-dev \
+            libsoup-3.0-dev
+
+      - name: Run extreme test script
+        env:
+          CLAVIS_REQUIRE_TAURI_TESTS: "1"
+        run: bash scripts/run-extreme-tests.sh

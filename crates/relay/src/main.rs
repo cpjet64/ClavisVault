@@ -1,0 +1,486 @@
+#![forbid(unsafe_code)]
+
+use std::{
+    collections::{HashMap, VecDeque},
+    env,
+    net::{IpAddr, SocketAddr},
+    time::{Duration, Instant},
+};
+
+use anyhow::{Context, Result, anyhow, bail};
+use tokio::{net::UdpSocket, signal};
+use tracing::{debug, info, warn};
+
+const MAGIC: &[u8; 8] = b"CLAVISRL";
+const PROTOCOL_VERSION: u8 = 1;
+const MAGIC_LEN: usize = 8;
+const VERSION_OFFSET: usize = MAGIC_LEN;
+const LENGTH_OFFSET: usize = VERSION_OFFSET + 1;
+const SENDER_PUBKEY_HASH_OFFSET: usize = LENGTH_OFFSET + 2;
+const SENDER_PUBKEY_HASH_LEN: usize = 32;
+const HEADER_LEN: usize = SENDER_PUBKEY_HASH_OFFSET + SENDER_PUBKEY_HASH_LEN;
+const MAX_DATAGRAM_SIZE: usize = u16::MAX as usize;
+
+const DEFAULT_BIND_ADDR: &str = "0.0.0.0:51820";
+const PUBLIC_RELAY_EXAMPLE: &str = "relay.clavisvault.app:51820";
+
+const RATE_LIMIT_PACKETS_PER_SECOND: u32 = 50;
+const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(1);
+const PEER_STALE_AFTER: Duration = Duration::from_secs(5 * 60);
+const PEER_CLEANUP_INTERVAL: Duration = Duration::from_secs(30);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct PubkeyHash([u8; 32]);
+
+impl PubkeyHash {
+    fn from_slice(slice: &[u8]) -> Result<Self> {
+        let bytes: [u8; 32] = slice
+            .try_into()
+            .map_err(|_| anyhow!("sender_pubkey_hash must be 32 bytes"))?;
+        Ok(Self(bytes))
+    }
+}
+
+#[derive(Debug)]
+struct RelayPacket<'a> {
+    sender_pubkey_hash: PubkeyHash,
+    payload: &'a [u8],
+}
+
+#[derive(Debug, Clone)]
+struct PeerInfo {
+    addr: SocketAddr,
+    last_seen: Instant,
+}
+
+#[derive(Debug, Clone)]
+struct RateLimitEntry {
+    packet_timestamps: VecDeque<Instant>,
+}
+
+impl RateLimitEntry {
+    fn new(_now: Instant) -> Self {
+        Self {
+            packet_timestamps: VecDeque::new(),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct RateLimiter {
+    per_ip: HashMap<IpAddr, RateLimitEntry>,
+    max_packets_per_window: u32,
+    window: Duration,
+}
+
+impl RateLimiter {
+    fn new(max_packets_per_window: u32, window: Duration) -> Self {
+        Self {
+            per_ip: HashMap::new(),
+            max_packets_per_window,
+            window,
+        }
+    }
+
+    fn allow(&mut self, ip: IpAddr, now: Instant) -> bool {
+        self.cleanup_stale(now);
+
+        let entry = self
+            .per_ip
+            .entry(ip)
+            .or_insert_with(|| RateLimitEntry::new(now));
+
+        let max_packets = self.max_packets_per_window as usize;
+
+        // Keep only timestamps in the active window to enforce a strict per-second cap.
+        while let Some(&oldest) = entry.packet_timestamps.front() {
+            if now.duration_since(oldest) >= self.window {
+                entry.packet_timestamps.pop_front();
+            } else {
+                break;
+            }
+        }
+
+        if entry.packet_timestamps.len() >= max_packets {
+            return false;
+        }
+
+        entry.packet_timestamps.push_back(now);
+        true
+    }
+
+    fn cleanup_stale(&mut self, now: Instant) {
+        self.per_ip.retain(|_, entry| {
+            while let Some(&oldest) = entry.packet_timestamps.front() {
+                if now.duration_since(oldest) >= self.window {
+                    entry.packet_timestamps.pop_front();
+                } else {
+                    break;
+                }
+            }
+            !entry.packet_timestamps.is_empty()
+        });
+    }
+}
+
+#[derive(Debug)]
+struct RelayState {
+    peers: HashMap<PubkeyHash, PeerInfo>,
+    limiter: RateLimiter,
+    last_cleanup: Instant,
+}
+
+impl RelayState {
+    fn new(now: Instant) -> Self {
+        Self {
+            peers: HashMap::new(),
+            limiter: RateLimiter::new(RATE_LIMIT_PACKETS_PER_SECOND, RATE_LIMIT_WINDOW),
+            last_cleanup: now,
+        }
+    }
+
+    fn register_peer(&mut self, sender_pubkey_hash: PubkeyHash, addr: SocketAddr, now: Instant) {
+        self.peers.insert(
+            sender_pubkey_hash,
+            PeerInfo {
+                addr,
+                last_seen: now,
+            },
+        );
+    }
+
+    fn cleanup_stale_peers(&mut self, now: Instant) {
+        if now.duration_since(self.last_cleanup) < PEER_CLEANUP_INTERVAL {
+            return;
+        }
+        self.last_cleanup = now;
+        self.peers
+            .retain(|_, peer| now.duration_since(peer.last_seen) <= PEER_STALE_AFTER);
+    }
+
+    fn destinations_for(&self, sender_pubkey_hash: PubkeyHash, payload: &[u8]) -> Vec<SocketAddr> {
+        if let Some(target_hash) = target_hint_from_payload(payload)
+            && target_hash != sender_pubkey_hash
+            && let Some(target_peer) = self.peers.get(&target_hash)
+        {
+            return vec![target_peer.addr];
+        }
+
+        self.peers
+            .iter()
+            .filter_map(|(peer_hash, peer)| {
+                if *peer_hash == sender_pubkey_hash {
+                    None
+                } else {
+                    Some(peer.addr)
+                }
+            })
+            .collect()
+    }
+}
+
+enum Command {
+    Run { bind_addr: SocketAddr },
+    Help,
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
+        .with_target(false)
+        .compact()
+        .init();
+
+    let command = parse_args(env::args().skip(1).collect())?;
+    match command {
+        Command::Help => {
+            print_help();
+            Ok(())
+        }
+        Command::Run { bind_addr } => run_relay(bind_addr).await,
+    }
+}
+
+fn parse_args(args: Vec<String>) -> Result<Command> {
+    let mut bind_addr = DEFAULT_BIND_ADDR.to_string();
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--bind" => {
+                i += 1;
+                if i >= args.len() {
+                    bail!("missing value for --bind");
+                }
+                bind_addr = args[i].clone();
+            }
+            "--help" | "-h" => return Ok(Command::Help),
+            other => bail!("unknown argument: {other}"),
+        }
+        i += 1;
+    }
+
+    let bind_addr: SocketAddr = bind_addr
+        .parse()
+        .with_context(|| format!("invalid bind address: {bind_addr}"))?;
+    Ok(Command::Run { bind_addr })
+}
+
+fn print_help() {
+    println!("clavisvault-relay [--bind 0.0.0.0:51820]");
+    println!("Custom protocol: [8]CLAVISRL [1]version [2]len [32]sender_pubkey_hash [payload]");
+    println!("Public relay example: {PUBLIC_RELAY_EXAMPLE}");
+}
+
+fn parse_relay_packet(datagram: &[u8]) -> Result<RelayPacket<'_>> {
+    if datagram.len() < HEADER_LEN {
+        bail!("packet too short");
+    }
+
+    if &datagram[..8] != MAGIC {
+        bail!("invalid magic");
+    }
+
+    let version = datagram[VERSION_OFFSET];
+    if version != PROTOCOL_VERSION {
+        bail!("unsupported protocol version: {version}");
+    }
+
+    let payload_len =
+        u16::from_be_bytes([datagram[LENGTH_OFFSET], datagram[LENGTH_OFFSET + 1]]) as usize;
+    let actual_payload_len = datagram.len() - HEADER_LEN;
+    if payload_len != actual_payload_len {
+        bail!("declared payload len does not match datagram size");
+    }
+
+    let sender_pubkey_hash =
+        PubkeyHash::from_slice(&datagram[SENDER_PUBKEY_HASH_OFFSET..HEADER_LEN])?;
+    let payload = &datagram[HEADER_LEN..];
+
+    Ok(RelayPacket {
+        sender_pubkey_hash,
+        payload,
+    })
+}
+
+fn target_hint_from_payload(payload: &[u8]) -> Option<PubkeyHash> {
+    if payload.len() < 32 {
+        return None;
+    }
+    PubkeyHash::from_slice(&payload[..32]).ok()
+}
+
+async fn run_relay(bind_addr: SocketAddr) -> Result<()> {
+    let socket = UdpSocket::bind(bind_addr)
+        .await
+        .with_context(|| format!("failed to bind relay socket at {bind_addr}"))?;
+
+    let actual_addr = socket.local_addr()?;
+    info!("clavisvault-relay listening on {actual_addr}");
+    info!("public relay example: {PUBLIC_RELAY_EXAMPLE}");
+    info!(
+        "protocol active (magic=CLAVISRL version={} rate_limit={}pkt/s)",
+        PROTOCOL_VERSION, RATE_LIMIT_PACKETS_PER_SECOND
+    );
+
+    let mut state = RelayState::new(Instant::now());
+    let mut buffer = vec![0_u8; MAX_DATAGRAM_SIZE];
+
+    loop {
+        tokio::select! {
+            recv_result = socket.recv_from(&mut buffer) => {
+                let (len, src_addr) = match recv_result {
+                    Ok(v) => v,
+                    Err(err) => {
+                        warn!("recv_from failed: {err}");
+                        continue;
+                    }
+                };
+
+                let now = Instant::now();
+                state.cleanup_stale_peers(now);
+
+                if !state.limiter.allow(src_addr.ip(), now) {
+                    warn!("rate-limit exceeded for {}", src_addr.ip());
+                    continue;
+                }
+
+                let datagram = &buffer[..len];
+                let packet = match parse_relay_packet(datagram) {
+                    Ok(packet) => packet,
+                    Err(err) => {
+                        debug!("dropping invalid packet from {src_addr}: {err:#}");
+                        continue;
+                    }
+                };
+
+                state.register_peer(packet.sender_pubkey_hash, src_addr, now);
+                let destinations = state.destinations_for(packet.sender_pubkey_hash, packet.payload);
+
+                for destination in destinations {
+                    if destination == src_addr {
+                        continue;
+                    }
+                    if let Err(err) = socket.send_to(datagram, destination).await {
+                        warn!("failed forwarding to {destination}: {err}");
+                    }
+                }
+            }
+            signal_result = signal::ctrl_c() => {
+                signal_result?;
+                info!("shutdown signal received");
+                break;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_hash(seed: u8) -> PubkeyHash {
+        PubkeyHash([seed; 32])
+    }
+
+    fn build_packet(sender: PubkeyHash, payload: &[u8]) -> Vec<u8> {
+        let mut packet = Vec::with_capacity(HEADER_LEN + payload.len());
+        packet.extend_from_slice(MAGIC);
+        packet.push(PROTOCOL_VERSION);
+        packet.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+        packet.extend_from_slice(&sender.0);
+        packet.extend_from_slice(payload);
+        packet
+    }
+
+    #[test]
+    fn parse_packet_accepts_valid_protocol_frame() {
+        let sender = sample_hash(7);
+        let payload = b"signal";
+        let packet = build_packet(sender, payload);
+        let parsed = parse_relay_packet(&packet).expect("packet should parse");
+        assert_eq!(parsed.sender_pubkey_hash, sender);
+        assert_eq!(parsed.payload, payload);
+    }
+
+    #[test]
+    fn parse_packet_rejects_wrong_magic() {
+        let sender = sample_hash(2);
+        let mut packet = build_packet(sender, b"x");
+        packet[0] = b'X';
+        assert!(parse_relay_packet(&packet).is_err());
+    }
+
+    #[test]
+    fn parse_packet_rejects_too_short_header() {
+        let packet = vec![0_u8; HEADER_LEN - 1];
+        assert!(parse_relay_packet(&packet).is_err());
+    }
+
+    #[test]
+    fn parse_packet_rejects_mismatched_payload_len() {
+        let sender = sample_hash(4);
+        let mut packet = build_packet(sender, b"hello");
+        packet[9] = 0;
+        packet[10] = 1;
+        assert!(parse_relay_packet(&packet).is_err());
+    }
+
+    #[test]
+    fn parse_packet_rejects_unsupported_version() {
+        let sender = sample_hash(5);
+        let mut packet = build_packet(sender, b"v");
+        packet[VERSION_OFFSET] = 99;
+        assert!(parse_relay_packet(&packet).is_err());
+    }
+
+    #[test]
+    fn rate_limiter_enforces_50_packets_per_second() {
+        let mut limiter = RateLimiter::new(RATE_LIMIT_PACKETS_PER_SECOND, RATE_LIMIT_WINDOW);
+        let ip: IpAddr = "127.0.0.1".parse().expect("ip should parse");
+        let now = Instant::now();
+
+        for _ in 0..RATE_LIMIT_PACKETS_PER_SECOND {
+            assert!(limiter.allow(ip, now));
+        }
+        assert!(!limiter.allow(ip, now));
+        assert!(limiter.allow(ip, now + RATE_LIMIT_WINDOW));
+    }
+
+    #[test]
+    fn rate_limiter_rejects_burst_within_same_window() {
+        let mut limiter = RateLimiter::new(RATE_LIMIT_PACKETS_PER_SECOND, RATE_LIMIT_WINDOW);
+        let ip: IpAddr = "127.0.0.1".parse().expect("ip should parse");
+        let now = Instant::now();
+
+        for _ in 0..RATE_LIMIT_PACKETS_PER_SECOND {
+            assert!(limiter.allow(ip, now));
+        }
+
+        assert!(!limiter.allow(ip, now + Duration::from_millis(500)));
+        assert!(limiter.allow(ip, now + Duration::from_millis(1001)));
+    }
+
+    #[test]
+    fn rate_limiter_is_scoped_per_source_ip() {
+        let mut limiter = RateLimiter::new(2, RATE_LIMIT_WINDOW);
+        let ip_a: IpAddr = "127.0.0.1".parse().expect("ip should parse");
+        let ip_b: IpAddr = "127.0.0.2".parse().expect("ip should parse");
+        let now = Instant::now();
+
+        assert!(limiter.allow(ip_a, now));
+        assert!(limiter.allow(ip_b, now));
+        assert!(limiter.allow(ip_a, now));
+        assert!(limiter.allow(ip_b, now));
+        assert!(!limiter.allow(ip_a, now));
+        assert!(!limiter.allow(ip_b, now));
+    }
+
+    #[test]
+    fn destination_selection_prefers_target_hint() {
+        let sender = sample_hash(1);
+        let target = sample_hash(2);
+        let other = sample_hash(3);
+
+        let now = Instant::now();
+        let mut state = RelayState::new(now);
+        state.register_peer(sender, "127.0.0.1:1001".parse().expect("addr"), now);
+        state.register_peer(target, "127.0.0.1:1002".parse().expect("addr"), now);
+        state.register_peer(other, "127.0.0.1:1003".parse().expect("addr"), now);
+
+        let mut payload = target.0.to_vec();
+        payload.extend_from_slice(b"opaque");
+
+        let destinations = state.destinations_for(sender, &payload);
+        assert_eq!(destinations, vec!["127.0.0.1:1002".parse().expect("addr")]);
+    }
+
+    #[test]
+    fn destination_selection_broadcasts_when_no_target_hint() {
+        let sender = sample_hash(9);
+        let peer_a = sample_hash(10);
+        let peer_b = sample_hash(11);
+
+        let now = Instant::now();
+        let mut state = RelayState::new(now);
+        state.register_peer(sender, "127.0.0.1:2001".parse().expect("addr"), now);
+        state.register_peer(peer_a, "127.0.0.1:2002".parse().expect("addr"), now);
+        state.register_peer(peer_b, "127.0.0.1:2003".parse().expect("addr"), now);
+
+        let mut destinations = state.destinations_for(sender, b"no-target-hint");
+        destinations.sort_unstable();
+
+        let mut expected = vec![
+            "127.0.0.1:2002".parse().expect("addr"),
+            "127.0.0.1:2003".parse().expect("addr"),
+        ];
+        expected.sort_unstable();
+
+        assert_eq!(destinations, expected);
+    }
+}

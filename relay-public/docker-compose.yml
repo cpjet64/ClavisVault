@@ -1,0 +1,9 @@
+services:
+  relay:
+    build:
+      context: ..
+      dockerfile: relay-public/Dockerfile
+    container_name: clavisvault-relay
+    restart: unless-stopped
+    ports:
+      - "51820:51820/udp"
