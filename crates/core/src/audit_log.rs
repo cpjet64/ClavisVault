@@ -127,4 +127,19 @@ mod tests {
         let timer = IdleLockTimer::new(Duration::minutes(7), now);
         assert_eq!(timer.timeout(), Duration::minutes(7));
     }
+
+    #[test]
+    fn record_preserves_operation_target_and_detail() {
+        let mut log = AuditLog::new(10);
+        log.record(
+            AuditOperation::FileUpdate,
+            Some("agents.md".to_string()),
+            "updated managed section",
+        );
+
+        let entry = &log.entries()[0];
+        assert_eq!(entry.operation, AuditOperation::FileUpdate);
+        assert_eq!(entry.target.as_deref(), Some("agents.md"));
+        assert_eq!(entry.detail, "updated managed section");
+    }
 }

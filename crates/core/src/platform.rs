@@ -135,6 +135,7 @@ mod tests {
     #[test]
     fn platform_dirs_resolve() {
         assert_resolved(WindowsPlatform::data_dir());
+        assert_resolved(WindowsPlatform::config_dir());
         assert_resolved(MacOsPlatform::config_dir());
         assert_resolved(LinuxPlatform::data_dir());
     }

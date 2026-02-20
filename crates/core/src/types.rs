@@ -179,4 +179,16 @@ mod tests {
                 .all(|entry| entry.secret.as_deref().is_none())
         );
     }
+
+    #[test]
+    fn key_entry_drop_path_handles_present_secret() {
+        let entry = KeyEntry {
+            name: "DROP_ME".to_string(),
+            description: "drop coverage".to_string(),
+            tags: vec!["coverage".to_string()],
+            last_updated: Utc::now(),
+            secret: Some("sensitive".to_string()),
+        };
+        drop(entry);
+    }
 }

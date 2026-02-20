@@ -329,6 +329,23 @@ mod tests {
     }
 
     #[test]
+    fn trim_backups_surfaces_remove_errors() {
+        let root = temp_dir("safe-file-trim-errors");
+        let target = root.join("agents.md");
+        let ops = LocalSafeFileOps::with_max_backups(0);
+
+        fs::write(root.join("agents.md.first.bak"), b"first")
+            .expect("backup fixture write should work");
+        fs::create_dir_all(root.join("agents.md.second.bak"))
+            .expect("directory backup fixture creation should work");
+
+        let err = ops
+            .trim_backups(&target)
+            .expect_err("trim should surface remove_file errors");
+        assert!(err.to_string().contains("failed removing old backup"));
+    }
+
+    #[test]
     fn backup_missing_file_creates_empty_backup_file() {
         let root = temp_dir("safe-file-empty-backup");
         let target = root.join("new-file.txt");
@@ -337,6 +354,13 @@ mod tests {
         let backup = ops.backup(&target).expect("backup should work");
         let bytes = fs::read(&backup.backup_path).expect("backup file should be readable");
         assert!(bytes.is_empty());
+    }
+
+    #[test]
+    fn backup_name_requires_filename() {
+        let err = LocalSafeFileOps::backup_name(Path::new(""), Utc::now())
+            .expect_err("backup names should require a filename");
+        assert!(err.to_string().contains("path has no filename"));
     }
 
     #[cfg(windows)]
@@ -486,9 +510,7 @@ mod tests {
         let err = LocalSafeFileOps::atomic_replace_path(path)
             .expect_err("atomic replace path should fail without filename");
         let message = err.to_string();
-        assert!(
-            message.contains("path has no filename") || message.contains("path has no parent")
-        );
+        assert!(message.contains("path has no filename") || message.contains("path has no parent"));
     }
 
     #[test]
