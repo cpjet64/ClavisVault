@@ -95,3 +95,11 @@ Desktop.ini
 # Local prompt payloads
 # ------------------------------
 prompts/
+
+# ------------------------------
+# Local orchestration artifacts
+# ------------------------------
+.worktrees/
+.worktree*/
+.codex_worktrees/
+security/dependency-graph*.json
