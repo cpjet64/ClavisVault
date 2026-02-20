@@ -98,29 +98,67 @@ jobs:
       - name: Install cargo-deny
         run: cargo install cargo-deny --locked
 
+      - name: Build validated cargo-audit ignore arguments
+        id: audit_exceptions
+        shell: bash
+        run: |
+          set -euo pipefail
+          IGNORE_ARGS="$(python - <<'PY'
+          import re
+          import sys
+          from datetime import datetime
+          from pathlib import Path
+          import tomllib
+
+
+          deny_toml = tomllib.load(Path("deny.toml").open("rb"))
+          ignores = deny_toml.get("advisories", {}).get("ignore", [])
+          if not isinstance(ignores, list) or not ignores:
+              print("")
+              sys.exit(0)
+
+          today = datetime.utcnow().date()
+          pattern = re.compile(r"^expiry\\s*:\\s*(\\d{4}-\\d{2}-\\d{2});\\s*rationale\\s*:\\s*(.+)$", re.IGNORECASE)
+          args = []
+
+          for item in ignores:
+              if not isinstance(item, dict):
+                  print("Use table-form advisory exceptions in deny.toml: [[advisories.ignore]] with id and reason.")
+                  sys.exit(1)
+              advisory_id = item.get("id")
+              reason = (item.get("reason") or "").strip()
+              if not isinstance(advisory_id, str) or not advisory_id:
+                  print("Every [[advisories.ignore]] entry requires a non-empty id.")
+                  sys.exit(1)
+              if not isinstance(reason, str) or not reason:
+                  print(f"advisory {advisory_id} must include a reason with expiry and rationale.")
+                  sys.exit(1)
+              match = pattern.match(reason)
+              if not match:
+                  print(f"advisory {advisory_id} reason must match 'expiry: YYYY-MM-DD; rationale: ...'")
+                  sys.exit(1)
+              expiry_text, rationale = match.groups()
+              if not rationale.strip():
+                  print(f"advisory {advisory_id} reason missing rationale text.")
+                  sys.exit(1)
+              try:
+                  expiry = datetime.strptime(expiry_text, "%Y-%m-%d").date()
+              except ValueError:
+                  print(f"advisory {advisory_id} has invalid expiry date '{expiry_text}'.")
+                  sys.exit(1)
+              if expiry < today:
+                  print(f"advisory {advisory_id} expired on {expiry}. Update deny.toml before continuing.")
+                  sys.exit(1)
+              args.append(f"--ignore {advisory_id}")
+
+          print(" ".join(args))
+          PY
+          )"
+          echo "ignore_args=$IGNORE_ARGS" >> "$GITHUB_OUTPUT"
+
       - name: Run cargo audit
         run: |
-          cargo audit \
-            --ignore RUSTSEC-2024-0413 \
-            --ignore RUSTSEC-2024-0416 \
-            --ignore RUSTSEC-2024-0388 \
-            --ignore RUSTSEC-2025-0057 \
-            --ignore RUSTSEC-2024-0412 \
-            --ignore RUSTSEC-2024-0418 \
-            --ignore RUSTSEC-2024-0411 \
-            --ignore RUSTSEC-2024-0417 \
-            --ignore RUSTSEC-2024-0414 \
-            --ignore RUSTSEC-2024-0415 \
-            --ignore RUSTSEC-2024-0420 \
-            --ignore RUSTSEC-2024-0419 \
-            --ignore RUSTSEC-2024-0384 \
-            --ignore RUSTSEC-2024-0370 \
-            --ignore RUSTSEC-2025-0081 \
-            --ignore RUSTSEC-2025-0075 \
-            --ignore RUSTSEC-2025-0080 \
-            --ignore RUSTSEC-2025-0100 \
-            --ignore RUSTSEC-2025-0098 \
-            --ignore RUSTSEC-2024-0429
+          cargo audit ${{ steps.audit_exceptions.outputs.ignore_args }}
 
       - name: Run cargo deny
         run: cargo deny check
