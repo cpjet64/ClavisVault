@@ -10,10 +10,14 @@ interface TabNavProps {
 }
 
 export function TabNav({ activeTab, onTabChange, showRemotes }: TabNavProps) {
-  const tabs: Array<{ id: TabId; label: string; icon: ComponentType<{ className?: string }> }> = [
+  type TabItem = { id: TabId; label: string; icon: ComponentType<{ className?: string }> };
+  const remoteTab: TabItem[] = showRemotes
+    ? [{ id: "remotes", label: "Remotes", icon: Link2 }]
+    : [];
+  const tabs: TabItem[] = [
     { id: "vault", label: "Vault", icon: Boxes },
     { id: "agents", label: "Agents / OpenClaw", icon: Files },
-    ...(showRemotes ? [{ id: "remotes", label: "Remotes", icon: Link2 }] : []),
+    ...remoteTab,
     { id: "settings", label: "Settings", icon: Settings2 },
   ];
 

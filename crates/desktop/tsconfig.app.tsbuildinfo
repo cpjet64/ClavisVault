@@ -1,1 +1,0 @@
-{"root":["./src/app.tsx","./src/main.tsx","./src/components/agentstab.tsx","./src/components/commandpalette.tsx","./src/components/glasscard.tsx","./src/components/remotestab.tsx","./src/components/settingstab.tsx","./src/components/tabnav.tsx","./src/components/vaulttab.tsx","./src/lib/api.ts","./src/lib/types.ts","./src/store/appstore.ts"],"version":"5.9.3"}

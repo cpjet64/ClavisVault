@@ -15,6 +15,8 @@ node_modules/
 .pnpm-store/
 .npm/
 .yarn/
+*.tsbuildinfo
+**/*.tsbuildinfo
 
 dist/
 build/
