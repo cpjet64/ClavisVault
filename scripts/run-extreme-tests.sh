@@ -7,17 +7,6 @@ PYTHON_BIN="python3"
 if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
   PYTHON_BIN="python"
 fi
-AUDIT_IGNORE_ARGS=()
-if [[ -f "${ROOT_DIR}/deny.toml" ]]; then
-  parsed_args="$(
-    "${PYTHON_BIN}" "${ROOT_DIR}/scripts/validate_audit_exceptions.py" \
-      --deny-toml "${ROOT_DIR}/deny.toml" \
-      --emit-args
-  )"
-  if [[ -n "${parsed_args}" ]]; then
-    read -r -a AUDIT_IGNORE_ARGS <<< "${parsed_args}"
-  fi
-fi
 
 if ! command -v cargo >/dev/null 2>&1; then
   CARGO_HOME_CANDIDATES=(
@@ -91,6 +80,7 @@ if [[ -f docs/CHANGELOG.md ]]; then
   exit 1
 fi
 echo "[2/10.1] validate audit ignore policy"
+"${PYTHON_BIN}" "${ROOT_DIR}/scripts/validate_audit_exceptions.py" --deny-toml "${ROOT_DIR}/deny.toml"
 "${PYTHON_BIN}" "${ROOT_DIR}/scripts/validate_audit_exceptions_test.py"
 cargo test -p clavisvault-cli tests::shell_session_exports_include_vault_path_and_token
 cargo test -p clavisvault-cli tests::shell_portable_env_assignments
@@ -146,7 +136,7 @@ echo "[6/10] cargo tarpaulin (core >=95%)"
 cargo tarpaulin --config tarpaulin.toml --package clavisvault-core --lib --fail-under 95
 
 echo "[7/10] cargo audit"
-cargo audit "${AUDIT_IGNORE_ARGS[@]}"
+cargo audit
 
 echo "[8/10] cargo deny check"
 cargo deny check

@@ -85,11 +85,6 @@ def _build_parser() -> argparse.ArgumentParser:
         default=Path("deny.toml"),
         help="Path to deny.toml",
     )
-    parser.add_argument(
-        "--emit-args",
-        action="store_true",
-        help="Output cargo-audit --ignore args for validated entries.",
-    )
     return parser
 
 
@@ -102,9 +97,13 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
-
-    if args.emit_args:
-        print(emit_ignore_args(ids))
+    if ids:
+        print(
+            "deny.toml must not include advisory ignores under the new zero-ignore policy.",
+            file=sys.stderr,
+        )
+        print(f"found advisory ignores: {', '.join(ids)}", file=sys.stderr)
+        return 1
     return 0
 
 

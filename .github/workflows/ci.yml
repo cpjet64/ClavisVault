@@ -98,18 +98,6 @@ jobs:
       - name: Install cargo-deny
         run: cargo install cargo-deny --locked
 
-      - name: Build validated cargo-audit ignore arguments
-        id: audit_exceptions
-        shell: bash
-        run: |
-          set -euo pipefail
-          PYTHON_BIN=python3
-          if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
-            PYTHON_BIN=python
-          fi
-          IGNORE_ARGS="$("${PYTHON_BIN}" scripts/validate_audit_exceptions.py --deny-toml deny.toml --emit-args)"
-          echo "ignore_args=$IGNORE_ARGS" >> "$GITHUB_OUTPUT"
-
       - name: Validate audit ignore policy tests
         shell: bash
         run: |
@@ -117,11 +105,11 @@ jobs:
           if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
             PYTHON_BIN=python
           fi
+          "${PYTHON_BIN}" scripts/validate_audit_exceptions.py --deny-toml deny.toml
           "${PYTHON_BIN}" scripts/validate_audit_exceptions_test.py
 
       - name: Run cargo audit
-        run: |
-          cargo audit ${{ steps.audit_exceptions.outputs.ignore_args }}
+        run: cargo audit
 
       - name: Run cargo deny
         run: cargo deny check
