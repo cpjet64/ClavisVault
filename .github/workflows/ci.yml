@@ -98,21 +98,14 @@ jobs:
       - name: Install cargo-deny
         run: cargo install cargo-deny --locked
 
-      - name: Validate audit ignore policy tests
-        shell: bash
-        run: |
-          PYTHON_BIN=python3
-          if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
-            PYTHON_BIN=python
-          fi
-          "${PYTHON_BIN}" scripts/validate_audit_exceptions.py --deny-toml deny.toml
-          "${PYTHON_BIN}" scripts/validate_audit_exceptions_test.py
+      - name: Run cargo deny (bans/licenses/sources)
+        run: cargo deny check bans licenses sources
+
+      - name: Enforce advisory policy
+        run: python scripts/enforce_advisory_policy.py
 
       - name: Run cargo audit
         run: cargo audit
-
-      - name: Run cargo deny
-        run: cargo deny check
 
   extreme:
     name: Extreme test smoke

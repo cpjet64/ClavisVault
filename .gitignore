@@ -39,6 +39,8 @@ tarpaulin-report.html
 tarpaulin-report.xml
 fuzz/artifacts/
 fuzz/coverage/
+__pycache__/
+**/__pycache__/
 
 # ------------------------------
 # Logs / runtime temp files

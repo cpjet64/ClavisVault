@@ -79,9 +79,8 @@ if [[ -f docs/CHANGELOG.md ]]; then
   echo "docs/CHANGELOG.md must not exist; changelog must remain at repository root"
   exit 1
 fi
-echo "[2/10.1] validate audit ignore policy"
-"${PYTHON_BIN}" "${ROOT_DIR}/scripts/validate_audit_exceptions.py" --deny-toml "${ROOT_DIR}/deny.toml"
-"${PYTHON_BIN}" "${ROOT_DIR}/scripts/validate_audit_exceptions_test.py"
+echo "[2/10.1] advisory policy unit tests"
+"${PYTHON_BIN}" "${ROOT_DIR}/scripts/enforce_advisory_policy_test.py"
 cargo test -p clavisvault-cli tests::shell_session_exports_include_vault_path_and_token
 cargo test -p clavisvault-cli tests::shell_portable_env_assignments
 cargo test -p clavisvault-cli tests::session_token_rejects_legacy_plaintext_format
@@ -135,20 +134,23 @@ fi
 echo "[6/10] cargo tarpaulin (core >=95%)"
 cargo tarpaulin --config tarpaulin.toml --package clavisvault-core --lib --fail-under 95
 
-echo "[7/10] cargo audit"
+echo "[7/10] cargo deny check bans/licenses/sources"
+cargo deny check bans licenses sources
+
+echo "[8/10] enforce advisory policy"
+"${PYTHON_BIN}" "${ROOT_DIR}/scripts/enforce_advisory_policy.py"
+
+echo "[9/10] cargo audit"
 cargo audit
 
-echo "[8/10] cargo deny check"
-cargo deny check
-
-echo "[9/10] ensure nightly + cargo-fuzz"
+echo "[10/10] ensure nightly + cargo-fuzz"
 ensure_cargo_subcommand "fuzz" "cargo-fuzz"
 
 if ! rustup toolchain list | grep -q "^nightly"; then
   rustup toolchain install nightly --profile minimal
 fi
 
-echo "[10/10] fuzz smoke (core parsers + crypto invariants)"
+echo "[10/10.1] fuzz smoke (core parsers + crypto invariants)"
 pushd crates/core >/dev/null
 cargo +nightly fuzz run vault_blob_parser -- -max_total_time=45 -verbosity=0 -print_final_stats=1
 cargo +nightly fuzz run agents_guarded_section -- -max_total_time=60 -verbosity=0 -print_final_stats=1
