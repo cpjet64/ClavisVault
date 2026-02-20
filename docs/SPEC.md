@@ -172,7 +172,7 @@ UI Tabs
 - Vault: searchable table, add/edit modal (strength meter), groups, bulk export
 - Agents / OpenClaw: linked files + watch folders, “Update Now”
 - Remotes: toggle “Enable Server Sync” (default OFF). When ON → new menu bar “Remotes” with “Add New” and one button per server.  
-  - Add New supports IP:port or hostname + pairing code or relay fingerprint
+  - Add New supports IP:port or hostname + pairing code + relay fingerprint
   - List shows server name, key count, last sync
   - Remove server = remote erase vault + remove locally
 - Settings: master password change, idle auto-lock (10 min default), launch on startup + minimized, update channel, relay endpoint (public or custom), clear clipboard after 30 s, audit log viewer, theme/accent picker, global Cmd/Ctrl+K search, biometric toggle, wipe-after-10-fails warning

@@ -10,7 +10,7 @@ interface RemotesTabProps {
   onRemoveRemote: (remoteId: string) => Promise<void>;
 }
 
-const hasPairingInput = (value: string) => value.trim().length > 0;
+const hasRequiredInput = (value: string) => value.trim().length > 0;
 
 const endpointLooksLikeHostPort = (endpoint: string): boolean => {
   const trimmed = endpoint.trim();
@@ -45,9 +45,19 @@ export function RemotesTab({ enabled, remotes, onAddRemote, onRemoveRemote }: Re
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  const hasPairing = useMemo(() => hasPairingInput(pairingCode) || hasPairingInput(relayFingerprint), [pairingCode, relayFingerprint]);
+  const hasPairingCode = useMemo(() => hasRequiredInput(pairingCode), [pairingCode]);
+  const hasRelayFingerprint = useMemo(
+    () => hasRequiredInput(relayFingerprint),
+    [relayFingerprint],
+  );
   const endpointIsValid = useMemo(() => endpointLooksLikeHostPort(endpoint), [endpoint]);
-  const canSubmit = Boolean(name.trim()) && Boolean(endpoint.trim()) && hasPairing && endpointIsValid && !isSubmitting;
+  const canSubmit =
+    Boolean(name.trim()) &&
+    Boolean(endpoint.trim()) &&
+    hasPairingCode &&
+    hasRelayFingerprint &&
+    endpointIsValid &&
+    !isSubmitting;
 
   return (
     <div className="space-y-4">
@@ -74,13 +84,13 @@ export function RemotesTab({ enabled, remotes, onAddRemote, onRemoveRemote }: Re
 
       <GlassCard>
         <h3 className="mb-3 text-sm font-semibold uppercase tracking-[0.16em] text-text/70">Add New Remote</h3>
-        <p className="mb-3 text-xs text-text/70">Endpoint accepts IP:port or hostname. Pairing code or relay fingerprint must be provided.</p>
+        <p className="mb-3 text-xs text-text/70">Endpoint accepts IP:port or hostname. Pairing code and server fingerprint are required.</p>
         <form
           className="grid gap-3 md:grid-cols-2"
           onSubmit={async (event) => {
             event.preventDefault();
             if (!canSubmit) {
-              setSubmitError("Provide a valid endpoint and a pairing code or relay fingerprint.");
+              setSubmitError("Provide a valid endpoint, pairing code, and server fingerprint.");
               return;
             }
             setSubmitError(null);
@@ -121,14 +131,16 @@ export function RemotesTab({ enabled, remotes, onAddRemote, onRemoveRemote }: Re
           <input
             value={pairingCode}
             onChange={(event) => setPairingCode(event.target.value)}
-            placeholder="Pairing code (optional)"
+            placeholder="Pairing code"
             className="rounded-lg border border-white/15 bg-surface/70 px-3 py-2 text-sm text-text outline-none"
+            required
           />
           <input
             value={relayFingerprint}
             onChange={(event) => setRelayFingerprint(event.target.value)}
-            placeholder="Relay fingerprint (optional)"
+            placeholder="Server fingerprint (SHA-256 hex)"
             className="rounded-lg border border-white/15 bg-surface/70 px-3 py-2 text-sm text-text outline-none"
+            required
           />
           <button
             type="submit"

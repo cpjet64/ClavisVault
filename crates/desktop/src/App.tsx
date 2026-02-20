@@ -454,6 +454,12 @@ export default function App() {
                   setSettings(saved);
                   setLastActionMessage("Settings saved.");
                 }}
+                onChangeMasterPassword={async (currentPassword, newPassword) => {
+                  const nextSummary = await api.changeMasterPassword(currentPassword, newPassword);
+                  setSummary(nextSummary);
+                  await queryClient.invalidateQueries({ queryKey: ["audit"] });
+                  setLastActionMessage("Master password changed.");
+                }}
                 onCheckUpdates={checkUpdates}
                 shellHooks={hooksQuery.data ?? {}}
               />

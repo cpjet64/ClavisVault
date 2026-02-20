@@ -9,6 +9,7 @@ interface SettingsTabProps {
   biometricAvailable: boolean;
   updateStatus: UpdateStatus | null;
   onSave: (settings: DesktopSettings) => Promise<void>;
+  onChangeMasterPassword: (currentPassword: string, newPassword: string) => Promise<void>;
   onCheckUpdates: () => Promise<void>;
   shellHooks: Record<string, string>;
 }
@@ -19,16 +20,32 @@ export function SettingsTab({
   biometricAvailable,
   updateStatus,
   onSave,
+  onChangeMasterPassword,
   onCheckUpdates,
   shellHooks,
 }: SettingsTabProps) {
   const [form, setForm] = useState(settings);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [passwordChangeError, setPasswordChangeError] = useState<string | null>(null);
+  const [passwordChangeSuccess, setPasswordChangeSuccess] = useState<string | null>(null);
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
 
   useEffect(() => {
     setForm(settings);
   }, [settings]);
 
   const canSave = useMemo(() => form.idleAutoLockMinutes >= 1, [form.idleAutoLockMinutes]);
+  const canChangePassword = useMemo(
+    () =>
+      currentPassword.length > 0 &&
+      newPassword.length >= 12 &&
+      confirmPassword.length > 0 &&
+      newPassword === confirmPassword &&
+      !isChangingPassword,
+    [confirmPassword, currentPassword, isChangingPassword, newPassword],
+  );
 
   return (
     <div className="space-y-4">
@@ -121,6 +138,15 @@ export function SettingsTab({
             Biometric unlock {biometricAvailable ? "available" : "not available"}
           </label>
 
+          <label className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-surface/50 px-3 py-2 text-sm text-text/85">
+            <input
+              type="checkbox"
+              checked={form.wipeAfterTenFailsWarning}
+              onChange={(event) => setForm({ ...form, wipeAfterTenFailsWarning: event.target.checked })}
+            />
+            Wipe warning after 10 failed attempts
+          </label>
+
           <label className="flex flex-col gap-1 text-sm text-text/80">
             Update channel
             <select
@@ -179,6 +205,78 @@ export function SettingsTab({
         >
           <CheckCircle2 className="h-4 w-4" /> Save Settings
         </button>
+
+        <div className="mt-6 rounded-lg border border-white/10 bg-surface/45 p-3">
+          <h4 className="text-sm font-semibold text-text">Change Master Password</h4>
+          <p className="mt-1 text-xs text-text/70">
+            Requires current password. New password must be at least 12 characters.
+          </p>
+          <div className="mt-3 grid gap-3 md:grid-cols-2">
+            <input
+              type="password"
+              value={currentPassword}
+              onChange={(event) => setCurrentPassword(event.target.value)}
+              placeholder="Current password"
+              className="rounded-lg border border-white/15 bg-surface/70 px-3 py-2 text-sm text-text outline-none"
+            />
+            <input
+              type="password"
+              value={newPassword}
+              onChange={(event) => setNewPassword(event.target.value)}
+              placeholder="New password (12+ chars)"
+              className="rounded-lg border border-white/15 bg-surface/70 px-3 py-2 text-sm text-text outline-none"
+            />
+            <input
+              type="password"
+              value={confirmPassword}
+              onChange={(event) => setConfirmPassword(event.target.value)}
+              placeholder="Confirm new password"
+              className="rounded-lg border border-white/15 bg-surface/70 px-3 py-2 text-sm text-text outline-none"
+            />
+            <button
+              type="button"
+              disabled={!canChangePassword}
+              onClick={async () => {
+                setPasswordChangeError(null);
+                setPasswordChangeSuccess(null);
+                if (!currentPassword.trim()) {
+                  setPasswordChangeError("Current password is required.");
+                  return;
+                }
+                if (newPassword.trim().length < 12) {
+                  setPasswordChangeError("New password must be at least 12 characters.");
+                  return;
+                }
+                if (newPassword !== confirmPassword) {
+                  setPasswordChangeError("New password confirmation does not match.");
+                  return;
+                }
+                if (currentPassword === newPassword) {
+                  setPasswordChangeError("New password must be different from current password.");
+                  return;
+                }
+
+                setIsChangingPassword(true);
+                try {
+                  await onChangeMasterPassword(currentPassword, newPassword);
+                  setCurrentPassword("");
+                  setNewPassword("");
+                  setConfirmPassword("");
+                  setPasswordChangeSuccess("Master password changed.");
+                } catch (error) {
+                  setPasswordChangeError(String(error));
+                } finally {
+                  setIsChangingPassword(false);
+                }
+              }}
+              className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/20 bg-surface/75 px-3 py-2 text-sm font-semibold text-text disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {isChangingPassword ? "Changing..." : "Change Password"}
+            </button>
+          </div>
+          {passwordChangeError ? <p className="mt-2 text-xs text-rose-200">{passwordChangeError}</p> : null}
+          {passwordChangeSuccess ? <p className="mt-2 text-xs text-emerald-200">{passwordChangeSuccess}</p> : null}
+        </div>
       </GlassCard>
 
       <GlassCard>

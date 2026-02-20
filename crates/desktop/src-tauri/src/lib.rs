@@ -519,6 +519,44 @@ fn lock_vault_command(
 }
 
 #[tauri::command]
+fn change_master_password(
+    state: State<'_, DesktopState>,
+    current_password: String,
+    new_password: String,
+) -> std::result::Result<VaultSummary, String> {
+    let mut current_password = current_password;
+    let mut new_password = new_password;
+
+    let outcome = (|| -> Result<VaultSummary> {
+        let mut inner = state.lock_inner()?;
+        enforce_idle_lock(&mut inner.vault);
+        let rotation = rotate_master_password(&mut inner.vault, &current_password, &new_password);
+        match rotation {
+            Ok(()) => {
+                inner.vault.audit.record(
+                    AuditOperation::FileUpdate,
+                    None,
+                    "master password changed",
+                );
+                Ok(inner.vault.summary())
+            }
+            Err(err) => {
+                inner.vault.audit.record(
+                    AuditOperation::FailedUnlock,
+                    None,
+                    format!("master password change failed: {err}"),
+                );
+                Err(err)
+            }
+        }
+    })();
+
+    current_password.zeroize();
+    new_password.zeroize();
+    outcome.map_err(err_to_string)
+}
+
+#[tauri::command]
 fn list_keys(state: State<'_, DesktopState>) -> std::result::Result<Vec<VaultKeyView>, String> {
     let mut inner = state.lock_inner().map_err(err_to_string)?;
     enforce_idle_lock(&mut inner.vault);
@@ -827,10 +865,17 @@ fn remote_server_name(endpoint: &str) -> Result<String> {
     Ok(host.to_string())
 }
 
-fn remote_endpoint_for_request(endpoint: &str) -> Result<(SocketAddr, String)> {
+fn remote_endpoint_for_request(
+    endpoint: &str,
+    pinned_server_fingerprint: bool,
+) -> Result<(SocketAddr, String)> {
     let endpoint = endpoint.trim();
     let socket_addr = resolve_remote_endpoint(endpoint)?;
-    let server_name = remote_server_name(endpoint)?;
+    let server_name = if pinned_server_fingerprint {
+        "localhost".to_string()
+    } else {
+        remote_server_name(endpoint)?
+    };
     Ok((socket_addr, server_name))
 }
 
@@ -838,6 +883,21 @@ fn ensure_settings_defaults(mut settings: DesktopSettings) -> DesktopSettings {
     resolve_remote_client_identity(&mut settings);
     if settings.remotes.is_empty() {
         settings.remotes = Vec::new();
+    }
+    for remote in &mut settings.remotes {
+        if let Some(server_fingerprint) = remote.server_fingerprint.as_deref()
+            && let Ok(parsed) = parse_remote_fingerprint(server_fingerprint)
+        {
+            remote.server_fingerprint = Some(parsed);
+        }
+
+        if remote.server_fingerprint.is_none()
+            && let Some(relay_fingerprint) = remote.relay_fingerprint.as_deref()
+            && let Ok(parsed) = parse_remote_fingerprint(relay_fingerprint)
+        {
+            remote.server_fingerprint = Some(parsed.clone());
+            remote.relay_fingerprint = Some(parsed);
+        }
     }
 
     settings
@@ -944,16 +1004,12 @@ async fn send_remote_push(
     client_private_key: &[u8; 32],
 ) -> Result<RemotePushResponse> {
     let request_encoded = serde_json::to_vec(request)?;
-    let (remote_endpoint, server_name) = remote_endpoint_for_request(endpoint)?;
+    let (remote_endpoint, server_name) =
+        remote_endpoint_for_request(endpoint, request.server_fingerprint.is_some())?;
     verify_remote_endpoint(endpoint)?;
 
     let mut endpoint_builder = Endpoint::client("[::]:0".parse()?)?;
-    let allow_unpinned_pairing =
-        request.pairing_code.is_some() && request.server_fingerprint.is_none();
-    let crypto = remote_client_tls_config(
-        request.server_fingerprint.as_deref(),
-        allow_unpinned_pairing,
-    )?;
+    let crypto = remote_client_tls_config(request.server_fingerprint.as_deref())?;
     let mut client_config = ClientConfig::new(Arc::new(
         quinn::crypto::rustls::QuicClientConfig::try_from(crypto)?,
     ));
@@ -1001,7 +1057,6 @@ async fn send_remote_push(
 
 fn remote_client_tls_config(
     expected_server_fingerprint: Option<&str>,
-    allow_unpinned_pairing: bool,
 ) -> Result<quinn::rustls::ClientConfig> {
     let tls_builder = quinn::rustls::ClientConfig::builder();
     let server_fingerprint = expected_server_fingerprint
@@ -1016,19 +1071,11 @@ fn remote_client_tls_config(
         let delegate =
             rustls_platform_verifier::Verifier::new(tls_builder.crypto_provider().clone())
                 .context("failed to initialize platform TLS verifier")?;
-        let pinned_verifier = RemoteServerCertVerifier::new(Arc::new(delegate), Some(expected));
+        let pinned_verifier =
+            RemoteServerCertVerifier::new(Arc::new(delegate), Some(expected), true);
         tls_builder
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(pinned_verifier))
-            .with_no_client_auth()
-    } else if allow_unpinned_pairing {
-        let delegate =
-            rustls_platform_verifier::Verifier::new(tls_builder.crypto_provider().clone())
-                .context("failed to initialize platform TLS verifier")?;
-        let pairing_verifier = RemoteServerCertVerifier::new(Arc::new(delegate), None);
-        tls_builder
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(pairing_verifier))
             .with_no_client_auth()
     } else {
         tls_builder
@@ -1043,6 +1090,7 @@ fn remote_client_tls_config(
 #[derive(Debug)]
 struct RemoteServerCertVerifier {
     expected_server_fingerprint: Option<String>,
+    allow_pinned_override: bool,
     delegate: Arc<dyn quinn::rustls::client::danger::ServerCertVerifier>,
 }
 
@@ -1050,11 +1098,13 @@ impl RemoteServerCertVerifier {
     fn new(
         delegate: Arc<dyn quinn::rustls::client::danger::ServerCertVerifier>,
         expected_server_fingerprint: Option<String>,
+        allow_pinned_override: bool,
     ) -> Self {
         Self {
             delegate,
             expected_server_fingerprint: expected_server_fingerprint
                 .map(|fingerprint| fingerprint.to_ascii_lowercase()),
+            allow_pinned_override,
         }
     }
 
@@ -1084,11 +1134,21 @@ impl quinn::rustls::client::danger::ServerCertVerifier for RemoteServerCertVerif
                 "server certificate fingerprint mismatch".to_string(),
             ));
         }
-        let _ = intermediates;
-        let _ = server_name;
-        let _ = ocsp;
-        let _ = now;
-        Ok(quinn::rustls::client::danger::ServerCertVerified::assertion())
+
+        match self
+            .delegate
+            .verify_server_cert(end_entity, intermediates, server_name, ocsp, now)
+        {
+            Ok(_) => Ok(quinn::rustls::client::danger::ServerCertVerified::assertion()),
+            Err(err)
+                if self.allow_pinned_override
+                    && self.expected_server_fingerprint.is_some()
+                    && is_unknown_issuer_error(&err) =>
+            {
+                Ok(quinn::rustls::client::danger::ServerCertVerified::assertion())
+            }
+            Err(err) => Err(err),
+        }
     }
 
     fn verify_tls12_signature(
@@ -1122,6 +1182,24 @@ impl quinn::rustls::client::danger::ServerCertVerifier for RemoteServerCertVerif
 
 fn normalize_fingerprint(fingerprint: &str) -> String {
     fingerprint.trim().to_ascii_lowercase()
+}
+
+fn parse_remote_fingerprint(value: &str) -> Result<String> {
+    let normalized = normalize_fingerprint(value);
+    if normalized.len() != REMOTE_CERTIFICATE_SHA256_LEN {
+        bail!("server fingerprint must be 64 hex characters");
+    }
+    if !normalized.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        bail!("server fingerprint must be hexadecimal");
+    }
+    Ok(normalized)
+}
+
+fn is_unknown_issuer_error(error: &quinn::rustls::Error) -> bool {
+    matches!(
+        error,
+        quinn::rustls::Error::InvalidCertificate(quinn::rustls::CertificateError::UnknownIssuer)
+    )
 }
 
 fn remote_fingerprint_from_certificate_der(certificate: &[u8]) -> String {
@@ -1176,6 +1254,20 @@ async fn pair_and_add_remote(
     if endpoint.is_empty() {
         return Err("remote endpoint is required".to_string());
     }
+    let pairing_code = request
+        .pairing_code
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "pairing code is required".to_string())?
+        .to_string();
+    let relay_fingerprint = request
+        .relay_fingerprint
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "server fingerprint is required for pairing".to_string())?;
+    let server_fingerprint = parse_remote_fingerprint(relay_fingerprint).map_err(err_to_string)?;
 
     let proof = build_noise_quic_pairing_proof(&endpoint).map_err(err_to_string)?;
     let now = Utc::now();
@@ -1209,9 +1301,9 @@ async fn pair_and_add_remote(
             id,
             name: request.name,
             endpoint: endpoint.clone(),
-            pairing_code: request.pairing_code.clone(),
-            relay_fingerprint: request.relay_fingerprint.clone(),
-            server_fingerprint: None,
+            pairing_code: Some(pairing_code.clone()),
+            relay_fingerprint: Some(server_fingerprint.clone()),
+            server_fingerprint: Some(server_fingerprint.clone()),
             session_token: None,
             key_count,
             last_sync: Some(now.to_rfc3339()),
@@ -1229,7 +1321,7 @@ async fn pair_and_add_remote(
         &remote,
         &fingerprint,
         &client_private_key,
-        request.pairing_code.as_deref(),
+        Some(pairing_code.as_str()),
         None,
         None,
         &payload,
@@ -1428,6 +1520,7 @@ pub fn run() {
                 bootstrap,
                 unlock_vault_command,
                 lock_vault_command,
+                change_master_password,
                 list_keys,
                 upsert_key,
                 delete_key,
@@ -1473,6 +1566,7 @@ pub fn run() {
                 bootstrap,
                 unlock_vault_command,
                 lock_vault_command,
+                change_master_password,
                 list_keys,
                 upsert_key,
                 delete_key,
@@ -1545,6 +1639,52 @@ fn persist_unlocked(runtime: &mut VaultRuntime) -> Result<()> {
         .cloned()
         .ok_or_else(|| anyhow!("missing active master key"))?;
     persist_encrypted_vault(runtime, &vault, &key)
+}
+
+fn validate_new_master_password(current_password: &str, new_password: &str) -> Result<()> {
+    if new_password.trim().is_empty() {
+        bail!("new password must not be empty");
+    }
+    if new_password.chars().count() < 12 {
+        bail!("new password must be at least 12 characters");
+    }
+    if current_password == new_password {
+        bail!("new password must be different from current password");
+    }
+    Ok(())
+}
+
+fn rotate_master_password(
+    runtime: &mut VaultRuntime,
+    current_password: &str,
+    new_password: &str,
+) -> Result<()> {
+    validate_new_master_password(current_password, new_password)?;
+    let encrypted = runtime
+        .encrypted
+        .as_ref()
+        .ok_or_else(|| anyhow!("vault has not been initialized yet"))?;
+
+    let mut vault = runtime
+        .decrypted
+        .as_ref()
+        .cloned()
+        .ok_or_else(|| anyhow!("vault is locked"))?;
+
+    let current_key = derive_master_key(current_password, &encrypted.header.salt)?;
+    unlock_vault(encrypted, &current_key).context("current password is incorrect")?;
+
+    let mut fresh_salt = [0_u8; 16];
+    rand::rngs::OsRng.fill_bytes(&mut fresh_salt);
+    vault.salt = fresh_salt;
+    let new_key = derive_master_key(new_password, &vault.salt)?;
+    persist_encrypted_vault(runtime, &vault, &new_key)?;
+
+    runtime.decrypted = Some(vault);
+    runtime.master_key = Some(new_key);
+    populate_runtime_secret_cache(runtime);
+    runtime.idle_timer.touch(Utc::now());
+    Ok(())
 }
 
 fn wipe_runtime_secrets(runtime: &mut VaultRuntime) {
@@ -1941,6 +2081,33 @@ fn hex_decode(value: &str) -> Result<Vec<u8>> {
 mod tests {
     use super::*;
     use std::env;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn seeded_runtime(password: &str) -> VaultRuntime {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time should be monotonic")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("clavisvault-rotate-{suffix}.cv"));
+        let mut runtime = VaultRuntime::new(path, 10);
+        let mut vault = VaultData::new([7_u8; 16]);
+        vault.keys.insert(
+            "ROTATE_TEST".to_string(),
+            KeyEntry {
+                name: "ROTATE_TEST".to_string(),
+                description: "rotation fixture".to_string(),
+                secret: Some("fixture-secret".to_string()),
+                tags: vec!["test".to_string()],
+                last_updated: Utc::now(),
+            },
+        );
+        let key = derive_master_key(password, &vault.salt).expect("fixture key derivation");
+        persist_encrypted_vault(&mut runtime, &vault, &key).expect("fixture vault persistence");
+        runtime.decrypted = Some(vault);
+        runtime.master_key = Some(key);
+        runtime
+    }
 
     #[test]
     fn parse_alert_block_requires_all_fields() {
@@ -2050,14 +2217,14 @@ message: "Optional update"
             remote_server_name("localhost:51821").expect("hostname should parse"),
             "localhost"
         );
-        assert!(remote_endpoint_for_request("localhost:51821").is_ok());
+        assert!(remote_endpoint_for_request("localhost:51821", false).is_ok());
     }
 
     #[test]
     fn remote_endpoint_parsing_rejects_invalid_values() {
         assert!(verify_remote_endpoint("localhost").is_err());
         assert!(remote_server_name("localhost").is_err());
-        assert!(remote_endpoint_for_request("localhost").is_err());
+        assert!(remote_endpoint_for_request("localhost", false).is_err());
         assert!(remote_server_name("[:]:1").is_err());
     }
 
@@ -2065,7 +2232,14 @@ message: "Optional update"
     fn remote_endpoint_validation_normalizes_whitespace() {
         assert!(verify_remote_endpoint("  localhost:51821  ").is_ok());
         let (_, server_name) =
-            remote_endpoint_for_request(" localhost:51821 ").expect("endpoint should parse");
+            remote_endpoint_for_request(" localhost:51821 ", false).expect("endpoint should parse");
+        assert_eq!(server_name, "localhost");
+    }
+
+    #[test]
+    fn remote_endpoint_uses_localhost_sni_when_fingerprint_is_pinned() {
+        let (_, server_name) =
+            remote_endpoint_for_request("10.0.0.5:51821", true).expect("endpoint should parse");
         assert_eq!(server_name, "localhost");
     }
 
@@ -2089,12 +2263,241 @@ message: "Optional update"
 
     #[test]
     fn remote_tls_config_rejects_invalid_pinned_fingerprint_length() {
-        assert!(remote_client_tls_config(Some("abcd"), false).is_err());
+        assert!(remote_client_tls_config(Some("abcd")).is_err());
     }
 
     #[test]
-    fn remote_tls_config_allows_unpinned_pairing_mode() {
-        assert!(remote_client_tls_config(None, true).is_ok());
+    fn remote_tls_config_allows_platform_verifier_mode() {
+        assert!(remote_client_tls_config(None).is_ok());
+    }
+
+    #[derive(Debug)]
+    struct FailingVerifier {
+        called: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl quinn::rustls::client::danger::ServerCertVerifier for FailingVerifier {
+        fn verify_server_cert(
+            &self,
+            _end_entity: &quinn::rustls::pki_types::CertificateDer<'_>,
+            _intermediates: &[quinn::rustls::pki_types::CertificateDer<'_>],
+            _server_name: &quinn::rustls::pki_types::ServerName<'_>,
+            _ocsp: &[u8],
+            _now: quinn::rustls::pki_types::UnixTime,
+        ) -> std::result::Result<
+            quinn::rustls::client::danger::ServerCertVerified,
+            quinn::rustls::Error,
+        > {
+            self.called.store(true, std::sync::atomic::Ordering::SeqCst);
+            Err(quinn::rustls::Error::General(
+                "delegate rejected certificate".into(),
+            ))
+        }
+
+        fn verify_tls12_signature(
+            &self,
+            message: &[u8],
+            cert: &quinn::rustls::pki_types::CertificateDer<'_>,
+            dss: &quinn::rustls::DigitallySignedStruct,
+        ) -> std::result::Result<
+            quinn::rustls::client::danger::HandshakeSignatureValid,
+            quinn::rustls::Error,
+        > {
+            let _ = (message, cert, dss);
+            Ok(quinn::rustls::client::danger::HandshakeSignatureValid::assertion())
+        }
+
+        fn verify_tls13_signature(
+            &self,
+            message: &[u8],
+            cert: &quinn::rustls::pki_types::CertificateDer<'_>,
+            dss: &quinn::rustls::DigitallySignedStruct,
+        ) -> std::result::Result<
+            quinn::rustls::client::danger::HandshakeSignatureValid,
+            quinn::rustls::Error,
+        > {
+            let _ = (message, cert, dss);
+            Ok(quinn::rustls::client::danger::HandshakeSignatureValid::assertion())
+        }
+
+        fn supported_verify_schemes(&self) -> Vec<quinn::rustls::SignatureScheme> {
+            vec![
+                quinn::rustls::SignatureScheme::RSA_PKCS1_SHA256,
+                quinn::rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
+                quinn::rustls::SignatureScheme::RSA_PSS_SHA256,
+            ]
+        }
+    }
+
+    #[derive(Debug)]
+    struct UnknownIssuerVerifier;
+
+    impl quinn::rustls::client::danger::ServerCertVerifier for UnknownIssuerVerifier {
+        fn verify_server_cert(
+            &self,
+            _end_entity: &quinn::rustls::pki_types::CertificateDer<'_>,
+            _intermediates: &[quinn::rustls::pki_types::CertificateDer<'_>],
+            _server_name: &quinn::rustls::pki_types::ServerName<'_>,
+            _ocsp: &[u8],
+            _now: quinn::rustls::pki_types::UnixTime,
+        ) -> std::result::Result<
+            quinn::rustls::client::danger::ServerCertVerified,
+            quinn::rustls::Error,
+        > {
+            Err(quinn::rustls::Error::InvalidCertificate(
+                quinn::rustls::CertificateError::UnknownIssuer,
+            ))
+        }
+
+        fn verify_tls12_signature(
+            &self,
+            message: &[u8],
+            cert: &quinn::rustls::pki_types::CertificateDer<'_>,
+            dss: &quinn::rustls::DigitallySignedStruct,
+        ) -> std::result::Result<
+            quinn::rustls::client::danger::HandshakeSignatureValid,
+            quinn::rustls::Error,
+        > {
+            let _ = (message, cert, dss);
+            Ok(quinn::rustls::client::danger::HandshakeSignatureValid::assertion())
+        }
+
+        fn verify_tls13_signature(
+            &self,
+            message: &[u8],
+            cert: &quinn::rustls::pki_types::CertificateDer<'_>,
+            dss: &quinn::rustls::DigitallySignedStruct,
+        ) -> std::result::Result<
+            quinn::rustls::client::danger::HandshakeSignatureValid,
+            quinn::rustls::Error,
+        > {
+            let _ = (message, cert, dss);
+            Ok(quinn::rustls::client::danger::HandshakeSignatureValid::assertion())
+        }
+
+        fn supported_verify_schemes(&self) -> Vec<quinn::rustls::SignatureScheme> {
+            vec![
+                quinn::rustls::SignatureScheme::RSA_PKCS1_SHA256,
+                quinn::rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
+                quinn::rustls::SignatureScheme::RSA_PSS_SHA256,
+            ]
+        }
+    }
+
+    #[test]
+    fn remote_tls_verifier_calls_delegate_before_fingerprint() {
+        use quinn::rustls::client::danger::ServerCertVerifier;
+        let called = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let delegate = std::sync::Arc::new(FailingVerifier {
+            called: called.clone(),
+        });
+        let cert = quinn::rustls::pki_types::CertificateDer::from(vec![1_u8, 2, 3, 4]);
+        let expected_fingerprint = remote_fingerprint_from_certificate_der(cert.as_ref());
+        let verifier =
+            RemoteServerCertVerifier::new(delegate.clone(), Some(expected_fingerprint), false);
+        let server_name = quinn::rustls::pki_types::ServerName::try_from("localhost")
+            .expect("localhost is a valid DNS server name");
+
+        assert!(
+            verifier
+                .verify_server_cert(
+                    &cert,
+                    &[],
+                    &server_name,
+                    &[],
+                    quinn::rustls::pki_types::UnixTime::now()
+                )
+                .is_err()
+        );
+        assert!(called.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn remote_tls_verifier_allows_unknown_issuer_when_fingerprint_is_pinned() {
+        use quinn::rustls::client::danger::ServerCertVerifier;
+        let delegate = std::sync::Arc::new(UnknownIssuerVerifier);
+        let cert = quinn::rustls::pki_types::CertificateDer::from(vec![9_u8, 8, 7, 6]);
+        let expected_fingerprint = remote_fingerprint_from_certificate_der(cert.as_ref());
+        let verifier = RemoteServerCertVerifier::new(delegate, Some(expected_fingerprint), true);
+        let server_name = quinn::rustls::pki_types::ServerName::try_from("localhost")
+            .expect("localhost is a valid DNS server name");
+
+        assert!(
+            verifier
+                .verify_server_cert(
+                    &cert,
+                    &[],
+                    &server_name,
+                    &[],
+                    quinn::rustls::pki_types::UnixTime::now()
+                )
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn parse_remote_fingerprint_requires_hex_sha256() {
+        assert!(parse_remote_fingerprint("").is_err());
+        assert!(parse_remote_fingerprint("abc").is_err());
+        assert!(parse_remote_fingerprint(&"z".repeat(64)).is_err());
+        assert!(parse_remote_fingerprint(&"a".repeat(64)).is_ok());
+    }
+
+    #[test]
+    fn validate_new_master_password_rejects_invalid_values() {
+        assert!(validate_new_master_password("old-passphrase", "").is_err());
+        assert!(validate_new_master_password("old-passphrase", "short").is_err());
+        assert!(validate_new_master_password("same-password", "same-password").is_err());
+        assert!(validate_new_master_password("old-passphrase", "new-passphrase-123").is_ok());
+    }
+
+    #[test]
+    fn rotate_master_password_rejects_wrong_current_password() {
+        let mut runtime = seeded_runtime("current-passphrase-123");
+        let before = runtime
+            .encrypted
+            .as_ref()
+            .expect("fixture encrypted vault")
+            .clone();
+        let result =
+            rotate_master_password(&mut runtime, "wrong-current-password", "new-passphrase-123");
+        assert!(result.is_err());
+        assert_eq!(
+            runtime
+                .encrypted
+                .as_ref()
+                .expect("encrypted vault should still exist"),
+            &before
+        );
+    }
+
+    #[test]
+    fn rotate_master_password_reencrypts_with_new_password() {
+        let mut runtime = seeded_runtime("current-passphrase-123");
+        let original_salt = runtime
+            .encrypted
+            .as_ref()
+            .expect("fixture encrypted vault")
+            .header
+            .salt;
+
+        rotate_master_password(&mut runtime, "current-passphrase-123", "new-passphrase-456")
+            .expect("rotation should succeed");
+
+        let encrypted = runtime
+            .encrypted
+            .as_ref()
+            .expect("rotated encrypted vault")
+            .clone();
+        assert_ne!(encrypted.header.salt, original_salt);
+
+        let new_key = derive_master_key("new-passphrase-456", &encrypted.header.salt)
+            .expect("new key derivation");
+        assert!(unlock_vault(&encrypted, &new_key).is_ok());
+
+        let old_key = derive_master_key("current-passphrase-123", &encrypted.header.salt)
+            .expect("old key derivation");
+        assert!(unlock_vault(&encrypted, &old_key).is_err());
     }
 
     #[test]

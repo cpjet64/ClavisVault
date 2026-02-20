@@ -1,99 +1,106 @@
-use anyhow::{Context, Result, anyhow};
-use argon2::{Algorithm, Argon2, Params, Version};
-use chacha20poly1305::{
-    ChaCha20Poly1305, KeyInit,
-    aead::{Aead, rand_core::RngCore},
-};
+use std::io::{Cursor, Read, Write};
+
+use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Utc};
-use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
-use zeroize::Zeroize;
+use zeroize::Zeroizing;
+use zip::{AesMode, CompressionMethod, ZipArchive, ZipWriter, write::SimpleFileOptions};
 
 use crate::types::VaultData;
 
-const EXPORT_KEY_LEN: usize = 32;
-const EXPORT_ARGON2_MEMORY_KIB: u32 = 19_456;
-const EXPORT_ARGON2_TIME_COST: u32 = 4;
-const EXPORT_ARGON2_PARALLELISM: u32 = 1;
+const EXPORT_FORMAT_VERSION: u32 = 1;
+const EXPORT_MANIFEST_PATH: &str = "manifest.json";
+const EXPORT_PAYLOAD_PATH: &str = "vault.json";
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-pub struct EncryptedExport {
+struct EncryptedExportManifest {
     pub version: u32,
     pub created_at: DateTime<Utc>,
-    pub salt: [u8; 16],
-    pub nonce: [u8; 12],
-    pub ciphertext: Vec<u8>,
 }
 
 pub fn encrypt_export(vault: &VaultData, passphrase: &str) -> Result<Vec<u8>> {
-    let mut salt = [0_u8; 16];
-    let mut nonce = [0_u8; 12];
-    OsRng.fill_bytes(&mut salt);
-    OsRng.fill_bytes(&mut nonce);
-
-    let mut key = derive_export_key(passphrase, &salt)?;
-
-    let mut plaintext = serde_json::to_vec(vault).context("failed to serialize vault export")?;
-
-    let cipher = ChaCha20Poly1305::new_from_slice(&key).map_err(|_| anyhow!("invalid key"))?;
-    let ciphertext = cipher
-        .encrypt((&nonce).into(), plaintext.as_ref())
-        .context("failed encrypting export")?;
-
-    plaintext.zeroize();
-    key.zeroize();
-
-    let export = EncryptedExport {
-        version: 1,
+    ensure_export_passphrase(passphrase)?;
+    let payload = Zeroizing::new(
+        serde_json::to_vec(vault).context("failed to serialize vault export payload")?,
+    );
+    let manifest = EncryptedExportManifest {
+        version: EXPORT_FORMAT_VERSION,
         created_at: Utc::now(),
-        salt,
-        nonce,
-        ciphertext,
     };
+    let manifest_bytes =
+        serde_json::to_vec(&manifest).context("failed to serialize export manifest")?;
+    let passphrase_owned = Zeroizing::new(passphrase.to_owned());
+    let file_options = SimpleFileOptions::default()
+        .compression_method(CompressionMethod::Deflated)
+        .with_aes_encryption(AesMode::Aes256, passphrase_owned.as_str());
+    let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
 
-    Ok(serde_json::to_vec_pretty(&export)?)
+    writer
+        .start_file(EXPORT_MANIFEST_PATH, file_options)
+        .context("failed starting export manifest file")?;
+    writer
+        .write_all(&manifest_bytes)
+        .context("failed writing export manifest")?;
+
+    writer
+        .start_file(EXPORT_PAYLOAD_PATH, file_options)
+        .context("failed starting encrypted vault payload file")?;
+    writer
+        .write_all(payload.as_slice())
+        .context("failed writing encrypted vault payload")?;
+
+    let cursor = writer
+        .finish()
+        .context("failed finalizing encrypted export archive")?;
+    Ok(cursor.into_inner())
 }
 
 pub fn decrypt_export(encoded: &[u8], passphrase: &str) -> Result<VaultData> {
-    let export: EncryptedExport =
-        serde_json::from_slice(encoded).context("failed parsing encrypted export")?;
+    ensure_export_passphrase(passphrase)?;
+    let mut archive =
+        ZipArchive::new(Cursor::new(encoded)).context("failed parsing encrypted export archive")?;
+    let mut manifest_json = Vec::new();
+    {
+        let mut manifest_file = archive
+            .by_name_decrypt(EXPORT_MANIFEST_PATH, passphrase.as_bytes())
+            .context("failed opening encrypted export manifest")?;
+        manifest_file
+            .read_to_end(&mut manifest_json)
+            .context("failed reading encrypted export manifest")?;
+    }
+    let manifest: EncryptedExportManifest = serde_json::from_slice(&manifest_json)
+        .context("failed decoding encrypted export manifest")?;
+    if manifest.version != EXPORT_FORMAT_VERSION {
+        bail!("unsupported export format version: {}", manifest.version);
+    }
 
-    let mut key = derive_export_key(passphrase, &export.salt)?;
+    let mut payload = Zeroizing::new(Vec::new());
+    {
+        let mut payload_file = archive
+            .by_name_decrypt(EXPORT_PAYLOAD_PATH, passphrase.as_bytes())
+            .context("failed opening encrypted vault payload")?;
+        payload_file
+            .read_to_end(&mut payload)
+            .context("failed reading encrypted vault payload")?;
+    }
 
-    let cipher = ChaCha20Poly1305::new_from_slice(&key).map_err(|_| anyhow!("invalid key"))?;
-    let mut plaintext = cipher
-        .decrypt((&export.nonce).into(), export.ciphertext.as_ref())
-        .context("failed decrypting export")?;
-
-    let vault = serde_json::from_slice::<VaultData>(&plaintext)
-        .context("failed decoding exported vault payload")?;
-
-    plaintext.zeroize();
-    key.zeroize();
-
-    Ok(vault)
+    serde_json::from_slice::<VaultData>(&payload).context("failed decoding exported vault payload")
 }
 
-fn derive_export_key(passphrase: &str, salt: &[u8; 16]) -> Result<[u8; EXPORT_KEY_LEN]> {
-    let params = Params::new(
-        EXPORT_ARGON2_MEMORY_KIB,
-        EXPORT_ARGON2_TIME_COST,
-        EXPORT_ARGON2_PARALLELISM,
-        Some(EXPORT_KEY_LEN),
-    )?;
+fn ensure_export_passphrase(passphrase: &str) -> Result<()> {
+    if passphrase.trim().is_empty() {
+        return Err(anyhow!("export passphrase must not be empty"));
+    }
 
-    let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
-    let mut key = [0_u8; EXPORT_KEY_LEN];
-    argon2
-        .hash_password_into(passphrase.as_bytes(), salt, &mut key)
-        .context("failed deriving export key")?;
-
-    Ok(key)
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
+    use std::io::{Cursor, Read};
+
     use chrono::Utc;
+    use zip::ZipArchive;
 
     use super::*;
     use crate::types::{KeyEntry, VaultData};
@@ -127,5 +134,42 @@ mod tests {
         let vault = VaultData::new([8; 16]);
         let encoded = encrypt_export(&vault, "good-passphrase").expect("encrypt should work");
         assert!(decrypt_export(&encoded, "wrong-passphrase").is_err());
+    }
+
+    #[test]
+    fn encrypted_export_is_aes_zip_archive() {
+        let vault = VaultData::new([9; 16]);
+        let encoded = encrypt_export(&vault, "zip-passphrase").expect("encrypt should work");
+        assert!(encoded.starts_with(b"PK\x03\x04"));
+
+        let mut archive =
+            ZipArchive::new(Cursor::new(encoded)).expect("export should be a readable zip archive");
+        assert_eq!(archive.len(), 2);
+
+        {
+            let manifest_entry = archive
+                .by_name_decrypt(EXPORT_MANIFEST_PATH, b"zip-passphrase")
+                .expect("manifest should decrypt");
+            assert!(manifest_entry.encrypted());
+        }
+
+        let mut payload_entry = archive
+            .by_name_decrypt(EXPORT_PAYLOAD_PATH, b"zip-passphrase")
+            .expect("payload should decrypt");
+        assert!(payload_entry.encrypted());
+
+        let mut payload_bytes = Vec::new();
+        payload_entry
+            .read_to_end(&mut payload_bytes)
+            .expect("payload should be readable");
+        let decoded = serde_json::from_slice::<VaultData>(&payload_bytes)
+            .expect("payload should decode as vault json");
+        assert_eq!(decoded.salt, vault.salt);
+    }
+
+    #[test]
+    fn encrypt_export_rejects_empty_passphrase() {
+        let vault = VaultData::new([1; 16]);
+        assert!(encrypt_export(&vault, "   ").is_err());
     }
 }

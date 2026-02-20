@@ -37,6 +37,8 @@ export const api = {
   getSettings: () => invoke<DesktopSettings>("get_settings"),
   saveSettings: (settings: DesktopSettings) =>
     invoke<DesktopSettings>("save_settings", { settings }),
+  changeMasterPassword: (currentPassword: string, newPassword: string) =>
+    invoke<VaultSummary>("change_master_password", { currentPassword, newPassword }),
   listAuditEntries: () => invoke<AuditEntryView[]>("list_audit_entries"),
   shellHooks: () => invoke<Record<string, string>>("shell_hooks"),
   biometricAvailable: () => invoke<boolean>("biometric_available"),

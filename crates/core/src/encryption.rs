@@ -131,12 +131,11 @@ pub fn unlock_vault(encrypted: &EncryptedVault, master_key: &MasterKey) -> Resul
         )
         .context("decryption failed")?;
 
-    let decoded = rmp_serde::from_slice::<VaultData>(&plaintext)
-        .context("failed to decode decrypted vault data")?;
+    let decoded = rmp_serde::from_slice::<VaultData>(&plaintext);
 
     plaintext.zeroize();
 
-    Ok(decoded)
+    decoded.context("failed to decode decrypted vault data")
 }
 
 pub fn unlock_with_password_or_biometric(

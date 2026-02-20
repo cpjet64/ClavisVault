@@ -50,3 +50,4 @@ base64 = "0.22"
 ed25519-dalek = { version = "2.1", features = ["rand_core"] }
 rcgen = "0.13"
 sha2 = "0.10"
+zip = "4.6"

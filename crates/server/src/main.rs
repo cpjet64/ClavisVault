@@ -664,9 +664,11 @@ fn validate_remote_command(command: &str) -> Result<()> {
     if command.is_empty() {
         return Ok(());
     }
+
     if !REMOTE_COMMAND_ALLOWED.contains(&command) {
         bail!("unsupported remote command; desktop is source-of-truth");
     }
+
     Ok(())
 }
 
@@ -683,16 +685,11 @@ fn handle_vault_push(
     }
 
     let has_session_token = request.token.is_some();
-    let client_fingerprint = request.client_fingerprint.clone().ok_or_else(|| {
-        anyhow!("missing client fingerprint (server requires bound client identity")
-    })?;
-    ensure_client_fingerprint_binding(state, &client_fingerprint)?;
-    let allow_initial_bind = !has_session_token && request.pairing_code.is_some();
-    let server_fingerprint = ensure_server_fingerprint_binding(
-        state,
-        request.server_fingerprint.as_deref(),
-        allow_initial_bind,
-    )?;
+    if request.password.is_some() {
+        verify_password(state, request.password.as_deref())?;
+    } else if !has_session_token && request.pairing_code.is_none() {
+        bail!("missing password");
+    }
 
     let issued_token = verify_or_pair(
         state,
@@ -700,11 +697,16 @@ fn handle_vault_push(
         request.pairing_code.as_deref(),
     )?;
 
-    if request.password.is_some() {
-        verify_password(state, request.password.as_deref())?;
-    } else if !has_session_token {
-        bail!("missing password");
-    }
+    let client_fingerprint = request.client_fingerprint.clone().ok_or_else(|| {
+        anyhow!("missing client fingerprint (server requires bound client identity")
+    })?;
+    let allow_initial_bind = !has_session_token && request.pairing_code.is_some();
+    let server_fingerprint = ensure_server_fingerprint_binding(
+        state,
+        request.server_fingerprint.as_deref(),
+        allow_initial_bind,
+    )?;
+    ensure_client_fingerprint_binding(state, &client_fingerprint)?;
 
     if command == REMOTE_COMMAND_ERASE {
         if paths.vault_file.exists() {
@@ -1018,6 +1020,7 @@ async fn run_daemon(paths: ServerPaths) -> Result<()> {
         .parse()
         .with_context(|| format!("invalid bind address: {}", state.bind_addr))?;
     let endpoint = configure_quic_server(bind_addr, &mut state)?;
+    let tls_fingerprint = server_certificate_fingerprint(&mut state)?;
     if !had_tls_identity {
         should_save_state = true;
     }
@@ -1037,6 +1040,7 @@ async fn run_daemon(paths: ServerPaths) -> Result<()> {
         bind_addr,
         runtime.lock().await.paths.data_dir.display()
     );
+    println!("SERVER FINGERPRINT {tls_fingerprint}");
     info!("waiting for QUIC+Noise full-vault pushes; Ctrl+C to stop");
 
     loop {
@@ -1226,6 +1230,39 @@ mod tests {
 
         let written = fs::read(paths.vault_file).expect("vault bytes should be written");
         assert_eq!(written, bytes);
+    }
+
+    #[test]
+    fn pairing_can_issue_token_without_password_field() {
+        let root = temp_dir("pair-without-password");
+        let paths = sample_paths(&root);
+        let mut state = ServerStateFile::default();
+        let challenge = ensure_pairing_challenge(&mut state);
+        let mut salt = [0_u8; 16];
+        rand::rngs::OsRng.fill_bytes(&mut salt);
+        let key = derive_master_key("pw-test-123", &salt).expect("derive should work");
+        let encrypted = lock_vault(paths.vault_file.clone(), &VaultData::new(salt), &key)
+            .expect("encrypt should work");
+        let bytes = encrypted.to_bytes().expect("serialize should work");
+
+        state.password = Some(PasswordRecord {
+            salt,
+            digest_hex: hex_of(Sha256::digest(key.as_slice()).as_ref()),
+        });
+
+        let request = PushRequest {
+            token: None,
+            pairing_code: Some(format!("{}-{}", challenge.code, challenge.checksum)),
+            password: None,
+            client_fingerprint: Some("f1".to_string()),
+            server_fingerprint: None,
+            command: None,
+            reason: None,
+            encrypted_vault_hex: hex_of(&bytes),
+        };
+
+        let response = handle_vault_push(&paths, &mut state, request).expect("pair should work");
+        assert!(response.issued_token.is_some());
     }
 
     #[test]
@@ -1485,15 +1522,11 @@ mod tests {
                     .clone()
                     .expect("pairing should bind server fingerprint"),
             ),
-            command: Some("erase".to_string()),
+            command: Some("unknown-command".to_string()),
             reason: Some("tests cleanup".to_string()),
             encrypted_vault_hex: String::new(),
         };
-        let bad_request = PushRequest {
-            command: Some("rm -rf /".to_string()),
-            ..erase_request
-        };
-        assert!(handle_vault_push(&paths, &mut state, bad_request).is_err());
+        assert!(handle_vault_push(&paths, &mut state, erase_request).is_err());
 
         let current_vault_bytes = fs::read(&paths.vault_file).expect("vault should exist");
         assert_eq!(original_vault_bytes, current_vault_bytes);
@@ -1501,7 +1534,7 @@ mod tests {
 
     #[test]
     fn remote_command_erase_removes_vault() {
-        let root = temp_dir("erase-success");
+        let root = temp_dir("remote-erase");
         let paths = sample_paths(&root);
         let mut state = ServerStateFile::default();
         let mut salt = [0_u8; 16];
@@ -1549,11 +1582,10 @@ mod tests {
                     .clone()
                     .expect("pairing should bind server fingerprint"),
             ),
-            command: Some("erase".to_string()),
+            command: Some(REMOTE_COMMAND_ERASE.to_string()),
             reason: Some("tests cleanup".to_string()),
-            encrypted_vault_hex: hex_of(&encrypted.to_bytes().expect("serialize")),
+            encrypted_vault_hex: String::new(),
         };
-
         let response =
             handle_vault_push(&paths, &mut state, erase_request).expect("erase should work");
         assert_eq!(response.ack_sha256, "erased");
@@ -1601,6 +1633,38 @@ mod tests {
 
         assert!(handle_vault_push(&paths, &mut state, request).is_err());
         assert!(!paths.vault_file.exists());
+    }
+
+    #[test]
+    fn invalid_pairing_does_not_bind_client_fingerprint() {
+        let root = temp_dir("invalid-pairing-no-bind");
+        let paths = sample_paths(&root);
+        let mut state = ServerStateFile::default();
+        let challenge = ensure_pairing_challenge(&mut state);
+        let mut salt = [0_u8; 16];
+        rand::rngs::OsRng.fill_bytes(&mut salt);
+        let key = derive_master_key("pw-test-123", &salt).expect("derive should work");
+        let encrypted = lock_vault(paths.vault_file.clone(), &VaultData::new(salt), &key)
+            .expect("encrypt should work");
+
+        state.password = Some(PasswordRecord {
+            salt,
+            digest_hex: hex_of(Sha256::digest(key.as_slice()).as_ref()),
+        });
+
+        let request = PushRequest {
+            token: None,
+            pairing_code: Some(format!("{}-{}-bad", challenge.code, challenge.checksum)),
+            password: Some("pw-test-123".to_string()),
+            client_fingerprint: Some("fp-unauth".to_string()),
+            server_fingerprint: None,
+            command: None,
+            reason: None,
+            encrypted_vault_hex: hex_of(&encrypted.to_bytes().expect("serialize")),
+        };
+
+        assert!(handle_vault_push(&paths, &mut state, request).is_err());
+        assert!(state.bound_client_fingerprint.is_none());
     }
 
     #[test]
