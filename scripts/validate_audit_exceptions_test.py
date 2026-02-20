@@ -99,6 +99,22 @@ class ValidateAuditExceptionsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             load_ignored_advisories(path, today=date(2026, 2, 20))
 
+    def test_empty_ignore_list_returns_empty_args(self) -> None:
+        path = self.make_file(
+            textwrap.dedent(
+                """
+                [advisories]
+                """
+            ).strip()
+        )
+        ids = load_ignored_advisories(path, today=date(2026, 2, 20))
+        self.assertEqual(ids, [])
+        self.assertEqual(emit_ignore_args(ids), "")
+
+    def test_missing_deny_toml_path_raises(self) -> None:
+        with self.assertRaises(FileNotFoundError):
+            load_ignored_advisories(Path("definitely-missing-deny.toml"), today=date(2026, 2, 20))
+
 
 if __name__ == "__main__":
     unittest.main()
