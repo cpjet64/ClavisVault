@@ -103,58 +103,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          IGNORE_ARGS="$(python - <<'PY'
-          import re
-          import sys
-          from datetime import datetime
-          from pathlib import Path
-          import tomllib
-
-
-          deny_toml = tomllib.load(Path("deny.toml").open("rb"))
-          ignores = deny_toml.get("advisories", {}).get("ignore", [])
-          if not isinstance(ignores, list) or not ignores:
-              print("")
-              sys.exit(0)
-
-          today = datetime.utcnow().date()
-          pattern = re.compile(r"^expiry\\s*:\\s*(\\d{4}-\\d{2}-\\d{2});\\s*rationale\\s*:\\s*(.+)$", re.IGNORECASE)
-          args = []
-
-          for item in ignores:
-              if not isinstance(item, dict):
-                  print("Use table-form advisory exceptions in deny.toml: [[advisories.ignore]] with id and reason.")
-                  sys.exit(1)
-              advisory_id = item.get("id")
-              reason = (item.get("reason") or "").strip()
-              if not isinstance(advisory_id, str) or not advisory_id:
-                  print("Every [[advisories.ignore]] entry requires a non-empty id.")
-                  sys.exit(1)
-              if not isinstance(reason, str) or not reason:
-                  print(f"advisory {advisory_id} must include a reason with expiry and rationale.")
-                  sys.exit(1)
-              match = pattern.match(reason)
-              if not match:
-                  print(f"advisory {advisory_id} reason must match 'expiry: YYYY-MM-DD; rationale: ...'")
-                  sys.exit(1)
-              expiry_text, rationale = match.groups()
-              if not rationale.strip():
-                  print(f"advisory {advisory_id} reason missing rationale text.")
-                  sys.exit(1)
-              try:
-                  expiry = datetime.strptime(expiry_text, "%Y-%m-%d").date()
-              except ValueError:
-                  print(f"advisory {advisory_id} has invalid expiry date '{expiry_text}'.")
-                  sys.exit(1)
-              if expiry < today:
-                  print(f"advisory {advisory_id} expired on {expiry}. Update deny.toml before continuing.")
-                  sys.exit(1)
-              args.append(f"--ignore {advisory_id}")
-
-          print(" ".join(args))
-          PY
-          )"
+          PYTHON_BIN=python3
+          if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
+            PYTHON_BIN=python
+          fi
+          IGNORE_ARGS="$("${PYTHON_BIN}" scripts/validate_audit_exceptions.py --deny-toml deny.toml --emit-args)"
           echo "ignore_args=$IGNORE_ARGS" >> "$GITHUB_OUTPUT"
+
+      - name: Validate audit ignore policy tests
+        shell: bash
+        run: |
+          PYTHON_BIN=python3
+          if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
+            PYTHON_BIN=python
+          fi
+          "${PYTHON_BIN}" scripts/validate_audit_exceptions_test.py
 
       - name: Run cargo audit
         run: |

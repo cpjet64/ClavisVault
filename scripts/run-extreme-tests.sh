@@ -3,32 +3,21 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT_DIR}"
-AUDIT_IGNORE=(
-  RUSTSEC-2024-0413
-  RUSTSEC-2024-0416
-  RUSTSEC-2024-0388
-  RUSTSEC-2025-0057
-  RUSTSEC-2024-0412
-  RUSTSEC-2024-0418
-  RUSTSEC-2024-0411
-  RUSTSEC-2024-0417
-  RUSTSEC-2024-0414
-  RUSTSEC-2024-0415
-  RUSTSEC-2024-0420
-  RUSTSEC-2024-0419
-  RUSTSEC-2024-0384
-  RUSTSEC-2024-0370
-  RUSTSEC-2025-0081
-  RUSTSEC-2025-0075
-  RUSTSEC-2025-0080
-  RUSTSEC-2025-0100
-  RUSTSEC-2025-0098
-  RUSTSEC-2024-0429
-)
+PYTHON_BIN="python3"
+if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
+  PYTHON_BIN="python"
+fi
 AUDIT_IGNORE_ARGS=()
-for id in "${AUDIT_IGNORE[@]}"; do
-  AUDIT_IGNORE_ARGS+=("--ignore" "$id")
-done
+if [[ -f "${ROOT_DIR}/deny.toml" ]]; then
+  parsed_args="$(
+    "${PYTHON_BIN}" "${ROOT_DIR}/scripts/validate_audit_exceptions.py" \
+      --deny-toml "${ROOT_DIR}/deny.toml" \
+      --emit-args
+  )"
+  if [[ -n "${parsed_args}" ]]; then
+    read -r -a AUDIT_IGNORE_ARGS <<< "${parsed_args}"
+  fi
+fi
 
 if ! command -v cargo >/dev/null 2>&1; then
   CARGO_HOME_CANDIDATES=(
@@ -101,6 +90,8 @@ if [[ -f docs/CHANGELOG.md ]]; then
   echo "docs/CHANGELOG.md must not exist; changelog must remain at repository root"
   exit 1
 fi
+echo "[2/10.1] validate audit ignore policy"
+"${PYTHON_BIN}" "${ROOT_DIR}/scripts/validate_audit_exceptions_test.py"
 cargo test -p clavisvault-cli tests::shell_session_exports_include_vault_path_and_token
 cargo test -p clavisvault-cli tests::shell_portable_env_assignments
 cargo test -p clavisvault-cli tests::session_token_rejects_legacy_plaintext_format
