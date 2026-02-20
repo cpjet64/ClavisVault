@@ -708,6 +708,14 @@ fn handle_vault_push(
     )?;
     ensure_client_fingerprint_binding(state, &client_fingerprint)?;
 
+    if request.encrypted_vault_hex.trim().is_empty() {
+        bail!("missing encrypted vault payload");
+    }
+
+    let vault_bytes = hex_decode(&request.encrypted_vault_hex)?;
+    let _parsed = EncryptedVault::from_bytes(&paths.vault_file, &vault_bytes)
+        .with_context(|| "push payload is not a valid encrypted vault blob")?;
+
     if command == REMOTE_COMMAND_ERASE {
         if paths.vault_file.exists() {
             fs::remove_file(&paths.vault_file)?;
@@ -719,14 +727,6 @@ fn handle_vault_push(
             issued_token,
         });
     }
-
-    if request.encrypted_vault_hex.trim().is_empty() {
-        bail!("missing encrypted vault payload");
-    }
-
-    let vault_bytes = hex_decode(&request.encrypted_vault_hex)?;
-    let _parsed = EncryptedVault::from_bytes(&paths.vault_file, &vault_bytes)
-        .with_context(|| "push payload is not a valid encrypted vault blob")?;
 
     let file_ops = LocalSafeFileOps::default();
     let backup = file_ops.backup(&paths.vault_file)?;
@@ -1584,12 +1584,130 @@ mod tests {
             ),
             command: Some(REMOTE_COMMAND_ERASE.to_string()),
             reason: Some("tests cleanup".to_string()),
-            encrypted_vault_hex: String::new(),
+            encrypted_vault_hex: hex_of(&encrypted.to_bytes().expect("serialize")),
         };
         let response =
             handle_vault_push(&paths, &mut state, erase_request).expect("erase should work");
         assert_eq!(response.ack_sha256, "erased");
         assert!(!paths.vault_file.exists());
+    }
+
+    #[test]
+    fn remote_command_erase_requires_payload() {
+        let root = temp_dir("remote-erase-empty");
+        let paths = sample_paths(&root);
+        let mut state = ServerStateFile::default();
+        let mut salt = [0_u8; 16];
+        rand::rngs::OsRng.fill_bytes(&mut salt);
+        let key = derive_master_key("pw-test-123", &salt).expect("derive should work");
+        let encrypted = lock_vault(paths.vault_file.clone(), &VaultData::new(salt), &key)
+            .expect("encrypt should work");
+        fs::write(
+            &paths.vault_file,
+            encrypted.to_bytes().expect("vault serialize"),
+        )
+        .expect("write");
+        state.password = Some(PasswordRecord {
+            salt,
+            digest_hex: hex_of(Sha256::digest(key.as_slice()).as_ref()),
+        });
+        let pair_code = ensure_pairing_challenge(&mut state);
+        let pair = format!("{}-{}", pair_code.code, pair_code.checksum);
+
+        let pair_request = PushRequest {
+            token: None,
+            pairing_code: Some(pair),
+            password: Some("pw-test-123".to_string()),
+            client_fingerprint: Some("fp-erase-empty".to_string()),
+            server_fingerprint: None,
+            command: None,
+            reason: None,
+            encrypted_vault_hex: hex_of(&encrypted.to_bytes().expect("serialize")),
+        };
+        let pair_response = handle_vault_push(&paths, &mut state, pair_request)
+            .expect("pair should work");
+        let issued_token = pair_response
+            .issued_token
+            .expect("pairing should return token")
+            .to_string();
+        let pre_erase_vault = fs::read(&paths.vault_file).expect("vault should exist");
+
+        let erase_request = PushRequest {
+            token: Some(issued_token),
+            pairing_code: None,
+            password: None,
+            client_fingerprint: Some("fp-erase-empty".to_string()),
+            server_fingerprint: Some(
+                state
+                    .bound_server_fingerprint
+                    .clone()
+                    .expect("pairing should bind server fingerprint"),
+            ),
+            command: Some(REMOTE_COMMAND_ERASE.to_string()),
+            reason: Some("tests cleanup".to_string()),
+            encrypted_vault_hex: String::new(),
+        };
+        assert!(handle_vault_push(&paths, &mut state, erase_request).is_err());
+        assert_eq!(pre_erase_vault, fs::read(&paths.vault_file).expect("vault should remain"));
+    }
+
+    #[test]
+    fn remote_command_erase_rejects_malformed_payload() {
+        let root = temp_dir("remote-erase-malformed");
+        let paths = sample_paths(&root);
+        let mut state = ServerStateFile::default();
+        let mut salt = [0_u8; 16];
+        rand::rngs::OsRng.fill_bytes(&mut salt);
+        let key = derive_master_key("pw-test-123", &salt).expect("derive should work");
+        let encrypted = lock_vault(paths.vault_file.clone(), &VaultData::new(salt), &key)
+            .expect("encrypt should work");
+        fs::write(
+            &paths.vault_file,
+            encrypted.to_bytes().expect("vault serialize"),
+        )
+        .expect("write");
+        state.password = Some(PasswordRecord {
+            salt,
+            digest_hex: hex_of(Sha256::digest(key.as_slice()).as_ref()),
+        });
+        let pair_code = ensure_pairing_challenge(&mut state);
+        let pair = format!("{}-{}", pair_code.code, pair_code.checksum);
+
+        let pair_request = PushRequest {
+            token: None,
+            pairing_code: Some(pair),
+            password: Some("pw-test-123".to_string()),
+            client_fingerprint: Some("fp-erase-malformed".to_string()),
+            server_fingerprint: None,
+            command: None,
+            reason: None,
+            encrypted_vault_hex: hex_of(&encrypted.to_bytes().expect("serialize")),
+        };
+        let pair_response = handle_vault_push(&paths, &mut state, pair_request)
+            .expect("pair should work");
+        let issued_token = pair_response
+            .issued_token
+            .expect("pairing should return token")
+            .to_string();
+        let pre_erase_vault = fs::read(&paths.vault_file).expect("vault should exist");
+
+        let erase_request = PushRequest {
+            token: Some(issued_token),
+            pairing_code: None,
+            password: None,
+            client_fingerprint: Some("fp-erase-malformed".to_string()),
+            server_fingerprint: Some(
+                state
+                    .bound_server_fingerprint
+                    .clone()
+                    .expect("pairing should bind server fingerprint"),
+            ),
+            command: Some(REMOTE_COMMAND_ERASE.to_string()),
+            reason: Some("tests cleanup".to_string()),
+            encrypted_vault_hex: "not-a-hex-payload".to_string(),
+        };
+        assert!(handle_vault_push(&paths, &mut state, erase_request).is_err());
+        assert_eq!(pre_erase_vault, fs::read(&paths.vault_file).expect("vault should remain"));
     }
 
     #[test]

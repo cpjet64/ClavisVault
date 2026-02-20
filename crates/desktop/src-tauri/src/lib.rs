@@ -977,6 +977,9 @@ async fn request_remote_erase(
     if remote.id.is_empty() {
         bail!("invalid remote id");
     }
+    if encrypted_vault_payload.is_empty() {
+        bail!("missing encrypted vault payload");
+    }
 
     let response = push_vault_to_remote_if_possible(
         remote,
@@ -2248,6 +2251,37 @@ message: "Optional update"
         assert!(validate_remote_command(None).is_ok());
         assert!(validate_remote_command(Some(REMOTE_COMMAND_ERASE)).is_ok());
         assert!(validate_remote_command(Some("rm -rf /")).is_err());
+    }
+
+    #[tokio::test]
+    async fn request_remote_erase_rejects_empty_payload() {
+        let remote = RemoteServer {
+            id: "remote-1".to_string(),
+            name: "remote".to_string(),
+            endpoint: "127.0.0.1:51821".to_string(),
+            pairing_code: None,
+            relay_fingerprint: None,
+            server_fingerprint: None,
+            session_token: None,
+            key_count: 0,
+            last_sync: None,
+        };
+        let client_private_key = [0_u8; 32];
+
+        let result = request_remote_erase(
+            &remote,
+            "fingerprint",
+            &client_private_key,
+            &[],
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert!(result
+            .err()
+            .expect("error expected")
+            .to_string()
+            .contains("missing encrypted vault payload"));
     }
 
     #[test]
