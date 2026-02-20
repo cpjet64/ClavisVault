@@ -172,4 +172,37 @@ mod tests {
         let vault = VaultData::new([1; 16]);
         assert!(encrypt_export(&vault, "   ").is_err());
     }
+
+    #[test]
+    fn decrypt_export_rejects_unsupported_manifest_version() {
+        let passphrase = "export-pass";
+        let manifest = EncryptedExportManifest {
+            version: EXPORT_FORMAT_VERSION + 1,
+            created_at: Utc::now(),
+        };
+
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let file_options = SimpleFileOptions::default()
+            .compression_method(CompressionMethod::Deflated)
+            .with_aes_encryption(AesMode::Aes256, passphrase);
+        writer
+            .start_file(EXPORT_MANIFEST_PATH, file_options)
+            .expect("start manifest should work");
+        writer
+            .write_all(&serde_json::to_vec(&manifest).expect("serialize manifest"))
+            .expect("write manifest should work");
+        writer
+            .start_file(EXPORT_PAYLOAD_PATH, file_options)
+            .expect("start payload should work");
+        writer
+            .write_all(b"{\"version\":1}")
+            .expect("write payload should work");
+        let encoded = writer
+            .finish()
+            .expect("zip finish should work")
+            .into_inner();
+
+        let err = decrypt_export(&encoded, passphrase).expect_err("decrypt should reject unsupported version");
+        assert!(err.to_string().contains("unsupported export format version"));
+    }
 }

@@ -316,6 +316,21 @@ mod tests {
     }
 
     #[test]
+    fn collect_events_propagates_followup_notify_error() {
+        let linker = ProjectLinker::default();
+        let (tx, rx) = mpsc::channel();
+        tx.send(Ok(notify::Event::default()))
+            .expect("send first event should work");
+        tx.send(Err(notify::Error::generic("forced follow-up notify failure")))
+            .expect("send follow-up error should work");
+
+        let err = linker
+            .collect_events(&rx, Duration::from_millis(50))
+            .expect_err("collect should fail for follow-up notify error");
+        assert!(err.to_string().contains("forced follow-up notify failure"));
+    }
+
+    #[test]
     fn watcher_collects_real_fs_event() {
         let root = temp_dir("project-linker-watch-events");
         fs::create_dir_all(&root).expect("watch root creation should work");
