@@ -23,6 +23,19 @@ if ! command -v cargo >/dev/null 2>&1; then
   done
 fi
 
+ensure_node_tooling() {
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "npm is required to build desktop frontend assets before Rust gates."
+    exit 1
+  fi
+}
+
+build_desktop_frontend_assets() {
+  ensure_node_tooling
+  npm --prefix "${ROOT_DIR}/crates/desktop" ci
+  npm --prefix "${ROOT_DIR}/crates/desktop" run build
+}
+
 ensure_cargo_subcommand() {
   local subcommand="$1"
   local package_name="$2"
@@ -34,6 +47,9 @@ ensure_cargo_subcommand() {
 ensure_cargo_subcommand "tarpaulin" "cargo-tarpaulin"
 ensure_cargo_subcommand "audit" "cargo-audit"
 ensure_cargo_subcommand "deny" "cargo-deny"
+
+echo "[0/10] build desktop frontend assets"
+build_desktop_frontend_assets
 
 if [[ ! -f CHANGELOG.md ]]; then
   echo "missing CHANGELOG.md at repository root"
@@ -81,6 +97,9 @@ if [[ -f docs/CHANGELOG.md ]]; then
 fi
 echo "[2/10.1] advisory policy unit tests"
 "${PYTHON_BIN}" "${ROOT_DIR}/scripts/enforce_advisory_policy_test.py"
+echo "[2/10.2] desktop network policy regression tests"
+"${PYTHON_BIN}" "${ROOT_DIR}/scripts/check_desktop_network_policy_test.py"
+"${PYTHON_BIN}" "${ROOT_DIR}/scripts/check_desktop_network_policy.py"
 cargo test -p clavisvault-cli tests::shell_session_exports_include_vault_path_and_token
 cargo test -p clavisvault-cli tests::shell_portable_env_assignments
 cargo test -p clavisvault-cli tests::session_token_rejects_legacy_plaintext_format

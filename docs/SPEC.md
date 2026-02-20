@@ -193,6 +193,8 @@ Auto-Updater
 Security
 - Vault lives only in tauri::State<DecryptedVault>
 - No plaintext over invoke except explicit single-key copy (auto-clear clipboard)
+- Desktop webview CSP connect-src is restricted to `'self'`; forbid `https:`, `http:`, and `*` in renderer policy to prevent uncontrolled outbound webview traffic.
+- Updater and P2P tunnel networking remain explicit Rust-side capabilities and are not expanded via frontend CSP.
 
 P2P Client
 QUIC + Noise_XX handshake over direct UDP or relay. Relay only does signalling.
@@ -256,6 +258,6 @@ Security Invariants (audited in every CI run)
 3. Every file touch is backed up first.
 4. Only guarded sections in agents.md / openclaw.json are modified.
 5. Relay cannot read any traffic.
-6. Desktop has zero network except updater & P2P tunnel (firewall-friendly).
+6. Desktop has zero network except updater & P2P tunnel (firewall-friendly), and webview CSP connect-src is limited to `'self'` with no wildcard or scheme-wide sources.
 
 This SPEC is complete and exhaustive. Any implementation that deviates must be rejected.

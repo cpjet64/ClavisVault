@@ -21,6 +21,7 @@ tauri-build = { workspace = true }
 anyhow.workspace = true
 chrono.workspace = true
 clavisvault-core.workspace = true
+keyring.workspace = true
 quinn.workspace = true
 rand.workspace = true
 serde.workspace = true

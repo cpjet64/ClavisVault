@@ -8,9 +8,13 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
     time::Duration,
 };
+#[cfg(test)]
+use std::sync::OnceLock;
 
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
+#[cfg(not(test))]
+use keyring::Entry;
 #[cfg(target_os = "linux")]
 use clavisvault_core::platform::LinuxPlatform;
 #[cfg(target_os = "macos")]
@@ -59,6 +63,15 @@ const REMOTE_COMMAND_ALLOWED: [&str; 1] = [REMOTE_COMMAND_ERASE];
 const NOISE_MSG_MAX_BYTES: usize = 64 * 1024;
 const REMOTE_FRAME_MAX_BYTES: usize = 64 * 1024 * 1024;
 const REMOTE_CERTIFICATE_SHA256_LEN: usize = 64;
+#[cfg(not(test))]
+const KEYRING_SERVICE: &str = "com.clavisvault.desktop";
+const REMOTE_CLIENT_PRIVATE_KEY_RECORD: &str = "desktop-remote-client-private-key";
+const REMOTE_SESSION_TOKEN_RECORD_PREFIX: &str = "desktop-remote-session-token-";
+#[cfg(not(test))]
+const KEYRING_MISSING: &str = "No credentials found for the given service";
+
+#[cfg(test)]
+static TEST_KEYRING: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -95,6 +108,7 @@ struct DesktopSettings {
     biometric_enabled: bool,
     remote_sync_enabled: bool,
     remote_client_fingerprint: String,
+    #[serde(default, skip_serializing)]
     remote_client_private_key: Option<String>,
     wipe_after_ten_fails_warning: bool,
     remotes: Vec<RemoteServer>,
@@ -134,6 +148,143 @@ fn remote_client_private_key_from_hex(hex_value: &str) -> Option<[u8; 32]> {
     }
 }
 
+#[cfg(test)]
+fn test_keyring_store() -> &'static Mutex<HashMap<String, String>> {
+    TEST_KEYRING.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn keyring_record_name_for_remote_session(remote_id: &str) -> String {
+    format!("{REMOTE_SESSION_TOKEN_RECORD_PREFIX}{remote_id}")
+}
+
+fn read_keyring_secret(name: &str) -> Result<Option<String>> {
+    #[cfg(test)]
+    {
+        let store = test_keyring_store()
+            .lock()
+            .map_err(|_| anyhow!("test keyring store unavailable"))?;
+        Ok(store.get(name).cloned())
+    }
+
+    #[cfg(not(test))]
+    {
+        let entry = Entry::new(KEYRING_SERVICE, name)
+            .map_err(|_| anyhow!("keyring service unavailable"))?;
+        match entry.get_password() {
+            Ok(secret) => Ok(Some(secret)),
+            Err(err) if err.to_string() == KEYRING_MISSING => Ok(None),
+            Err(err) => Err(anyhow!("failed reading keyring secret: {err}")),
+        }
+    }
+}
+
+fn write_keyring_secret(name: &str, value: &str) -> Result<()> {
+    #[cfg(test)]
+    {
+        let mut store = test_keyring_store()
+            .lock()
+            .map_err(|_| anyhow!("test keyring store unavailable"))?;
+        store.insert(name.to_string(), value.to_string());
+        Ok(())
+    }
+
+    #[cfg(not(test))]
+    {
+        let entry = Entry::new(KEYRING_SERVICE, name)
+            .map_err(|_| anyhow!("keyring service unavailable"))?;
+        entry
+            .set_password(value)
+            .map_err(|err| anyhow!("failed writing keyring secret: {err}"))?;
+        Ok(())
+    }
+}
+
+fn delete_keyring_secret(name: &str) -> Result<()> {
+    #[cfg(test)]
+    {
+        let mut store = test_keyring_store()
+            .lock()
+            .map_err(|_| anyhow!("test keyring store unavailable"))?;
+        store.remove(name);
+        Ok(())
+    }
+
+    #[cfg(not(test))]
+    {
+        let entry = Entry::new(KEYRING_SERVICE, name)
+            .map_err(|_| anyhow!("keyring service unavailable"))?;
+        match entry.delete_password() {
+            Ok(()) => Ok(()),
+            Err(err) if err.to_string() == KEYRING_MISSING => Ok(()),
+            Err(err) => Err(anyhow!("failed deleting keyring secret: {err}")),
+        }
+    }
+}
+
+fn store_remote_client_private_key(private_key: &str) {
+    let _ = write_keyring_secret(REMOTE_CLIENT_PRIVATE_KEY_RECORD, private_key);
+}
+
+fn load_remote_client_private_key() -> Option<String> {
+    read_keyring_secret(REMOTE_CLIENT_PRIVATE_KEY_RECORD).ok().flatten()
+}
+
+fn store_remote_session_token(remote_id: &str, token: &str) {
+    if remote_id.is_empty() {
+        return;
+    }
+    let _ = write_keyring_secret(&keyring_record_name_for_remote_session(remote_id), token);
+}
+
+fn load_remote_session_token(remote_id: &str) -> Option<String> {
+    if remote_id.is_empty() {
+        return None;
+    }
+    read_keyring_secret(&keyring_record_name_for_remote_session(remote_id))
+        .ok()
+        .flatten()
+}
+
+fn delete_remote_session_token(remote_id: &str) {
+    if remote_id.is_empty() {
+        return;
+    }
+    let _ = delete_keyring_secret(&keyring_record_name_for_remote_session(remote_id));
+}
+
+fn remote_session_token(remote: &RemoteServer) -> Option<String> {
+    remote
+        .session_token
+        .clone()
+        .or_else(|| load_remote_session_token(&remote.id))
+}
+
+fn migrate_remote_client_private_key(settings: &mut DesktopSettings) {
+    if let Some(cached) = load_remote_client_private_key() {
+        settings.remote_client_private_key = Some(cached);
+    }
+    resolve_remote_client_identity(settings);
+    if let Some(private_key) = settings.remote_client_private_key.as_deref() {
+        store_remote_client_private_key(private_key);
+    }
+}
+
+fn migrate_remote_session_tokens(remotes: &mut [RemoteServer]) {
+    for remote in remotes {
+        if let Some(token) = remote.session_token.as_deref() {
+            store_remote_session_token(&remote.id, token);
+        }
+    }
+}
+
+fn has_plaintext_remote_secrets(settings: &DesktopSettings) -> bool {
+    settings.remote_client_private_key.is_some()
+        || settings
+            .remotes
+            .iter()
+            .any(|remote| remote.session_token.is_some())
+}
+
 fn resolve_remote_client_identity(settings: &mut DesktopSettings) {
     let private_key = settings
         .remote_client_private_key
@@ -150,6 +301,7 @@ fn remote_client_private_key_bytes(settings: &DesktopSettings) -> Result<[u8; 32
         .remote_client_private_key
         .as_deref()
         .and_then(remote_client_private_key_from_hex)
+        .or_else(|| load_remote_client_private_key().and_then(|value| remote_client_private_key_from_hex(&value)))
         .or_else(|| remote_client_private_key_from_hex(&settings.remote_client_fingerprint))
         .ok_or_else(|| anyhow!("invalid remote client identity in settings"))?;
     Ok(private_key)
@@ -190,6 +342,7 @@ struct RemoteServer {
     #[serde(default)]
     server_fingerprint: Option<String>,
     #[serde(default)]
+    #[serde(skip_serializing)]
     session_token: Option<String>,
     key_count: usize,
     last_sync: Option<String>,
@@ -372,8 +525,9 @@ impl DesktopState {
 
         let settings_path = config_dir.join(SETTINGS_FILE_NAME);
         let loaded_settings = load_settings(&settings_path)?;
+        let had_plaintext_secrets = has_plaintext_remote_secrets(&loaded_settings);
         let settings = ensure_settings_defaults(loaded_settings.clone());
-        if settings != loaded_settings {
+        if settings != loaded_settings || had_plaintext_secrets {
             persist_settings_record(&settings_path, &settings)?;
         }
         let vault_path = data_dir.join(VAULT_FILE_NAME);
@@ -880,6 +1034,8 @@ fn remote_endpoint_for_request(
 }
 
 fn ensure_settings_defaults(mut settings: DesktopSettings) -> DesktopSettings {
+    migrate_remote_client_private_key(&mut settings);
+    migrate_remote_session_tokens(&mut settings.remotes);
     resolve_remote_client_identity(&mut settings);
     if settings.remotes.is_empty() {
         settings.remotes = Vec::new();
@@ -918,7 +1074,7 @@ fn build_remote_request(
     let command = command.map(std::string::ToString::to_string);
     let reason = reason.map(std::string::ToString::to_string);
     RemotePushRequest {
-        token: remote.session_token.clone(),
+        token: remote_session_token(remote),
         pairing_code: pairing_code.map(std::string::ToString::to_string),
         server_fingerprint: remote.server_fingerprint.clone(),
         client_fingerprint: Some(client_fingerprint.to_string()),
@@ -1334,6 +1490,7 @@ async fn pair_and_add_remote(
 
     let mut remote = remote;
     if let Some(issued_token) = response.issued_token {
+        store_remote_session_token(&remote.id, &issued_token);
         remote.session_token = Some(issued_token);
     }
     if let Some(server_fingerprint) = response.server_fingerprint {
@@ -1388,6 +1545,7 @@ async fn remove_remote(
     let mut inner = state.lock_inner().map_err(err_to_string)?;
     inner.remotes.retain(|remote| remote.id != remote_id);
     inner.settings.remotes = inner.remotes.clone();
+    delete_remote_session_token(&remote_id);
     persist_settings_record(&inner.settings_path, &inner.settings).map_err(err_to_string)?;
     inner
         .vault
@@ -1412,6 +1570,8 @@ fn save_settings(
     if settings.remote_client_private_key.is_none() {
         settings.remote_client_private_key = inner.settings.remote_client_private_key.clone();
     }
+    migrate_remote_client_private_key(&mut settings);
+    migrate_remote_session_tokens(&mut settings.remotes);
     resolve_remote_client_identity(&mut settings);
     settings.remotes = inner.settings.remotes.clone();
     apply_autostart(settings.launch_on_startup, settings.launch_minimized)
@@ -1426,8 +1586,7 @@ fn save_settings(
         Utc::now(),
     );
 
-    let rendered = serde_json::to_vec_pretty(&settings).map_err(err_to_string)?;
-    backup_then_atomic_write(&inner.settings_path, &rendered).map_err(err_to_string)?;
+    persist_settings_record(&inner.settings_path, &settings).map_err(err_to_string)?;
     inner.settings = settings;
     inner
         .vault
@@ -2542,6 +2701,86 @@ message: "Optional update"
 
         runtime.decrypted = None;
         assert!(ensure_remote_session_unlocked(&mut runtime).is_err());
+    }
+
+    #[test]
+    fn desktop_settings_serializes_without_remote_secrets() {
+        test_keyring_store().lock().unwrap().clear();
+        let private_key = "0".repeat(64);
+        let settings = DesktopSettings {
+            remote_client_private_key: Some(private_key),
+            remotes: vec![RemoteServer {
+                id: "remote-1".to_string(),
+                name: "remote".to_string(),
+                endpoint: "127.0.0.1:51821".to_string(),
+                pairing_code: None,
+                relay_fingerprint: None,
+                server_fingerprint: None,
+                session_token: Some("session-token".to_string()),
+                key_count: 0,
+                last_sync: None,
+            }],
+            ..DesktopSettings::default()
+        };
+
+        let rendered = serde_json::to_string(&settings).expect("settings should serialize");
+        assert!(!rendered.contains("remoteClientPrivateKey"));
+        assert!(!rendered.contains("sessionToken"));
+    }
+
+    #[test]
+    fn legacy_remote_secrets_are_migrated_to_keyring() {
+        test_keyring_store().lock().unwrap().clear();
+        let legacy_private_key = "11".repeat(32);
+        let remote_id = "legacy-remote-id".to_string();
+        let settings = DesktopSettings {
+            remote_client_private_key: Some(legacy_private_key.clone()),
+            remotes: vec![RemoteServer {
+                id: remote_id.clone(),
+                name: "remote".to_string(),
+                endpoint: "127.0.0.1:51821".to_string(),
+                pairing_code: None,
+                relay_fingerprint: None,
+                server_fingerprint: None,
+                session_token: Some("token-from-legacy-settings".to_string()),
+                key_count: 0,
+                last_sync: None,
+            }],
+            ..DesktopSettings::default()
+        };
+
+        let normalized = ensure_settings_defaults(settings.clone());
+        let rendered = serde_json::to_string(&normalized).expect("settings should serialize");
+
+        assert!(!rendered.contains("remoteClientPrivateKey"));
+        assert!(!rendered.contains("sessionToken"));
+        assert_eq!(load_remote_client_private_key(), Some(legacy_private_key));
+        assert_eq!(
+            load_remote_session_token(&remote_id),
+            Some("token-from-legacy-settings".to_string())
+        );
+    }
+
+    #[test]
+    fn remote_session_token_is_loaded_from_keyring_for_requests() {
+        test_keyring_store().lock().unwrap().clear();
+        let remote_id = "runtime-remote-id".to_string();
+        let token = "runtime-token";
+        store_remote_session_token(&remote_id, token);
+
+        let remote = RemoteServer {
+            id: remote_id,
+            name: "remote".to_string(),
+            endpoint: "127.0.0.1:51821".to_string(),
+            pairing_code: None,
+            relay_fingerprint: None,
+            server_fingerprint: None,
+            session_token: None,
+            key_count: 0,
+            last_sync: None,
+        };
+
+        assert_eq!(remote_session_token(&remote), Some(token.to_string()));
     }
 
     #[test]

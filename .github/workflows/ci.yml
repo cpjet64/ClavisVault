@@ -23,6 +23,13 @@ jobs:
           toolchain: 1.93.1
           components: clippy, rustfmt
 
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: crates/desktop/package-lock.json
+
       - name: Install Linux desktop dependencies
         if: ${{ runner.os == 'Linux' }}
         run: |
@@ -37,6 +44,11 @@ jobs:
             libjavascriptcoregtk-4.1-dev \
             libwebkit2gtk-4.1-dev \
             libsoup-3.0-dev
+
+      - name: Build desktop frontend assets
+        run: |
+          npm --prefix crates/desktop ci
+          npm --prefix crates/desktop run build
 
       - name: Cargo check
         run: cargo check --all
@@ -53,12 +65,18 @@ jobs:
       - name: Repository invariants
         shell: bash
         run: |
+          PYTHON_BIN="python3"
+          if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
+            PYTHON_BIN="python"
+          fi
           test -f CHANGELOG.md
           if [[ -f docs/CHANGELOG.md ]]; then
             echo "docs/CHANGELOG.md must not exist; changelog must be at repository root"
             exit 1
           fi
           test -d crates/desktop/src-tauri
+          "${PYTHON_BIN}" scripts/check_desktop_network_policy_test.py
+          "${PYTHON_BIN}" scripts/check_desktop_network_policy.py
           cargo test -p clavisvault-cli tests::session_token_rejects_legacy_plaintext_format
           cargo test -p clavisvault-cli tests::shell_session_export_snippets_handle_shell_specific_quotes
 
@@ -120,6 +138,13 @@ jobs:
           toolchain: 1.93.1
           components: clippy, rustfmt
 
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: crates/desktop/package-lock.json
+
       - name: Install test tooling
         run: |
           cargo install cargo-tarpaulin --locked
@@ -142,6 +167,11 @@ jobs:
             libjavascriptcoregtk-4.1-dev \
             libwebkit2gtk-4.1-dev \
             libsoup-3.0-dev
+
+      - name: Build desktop frontend assets
+        run: |
+          npm --prefix crates/desktop ci
+          npm --prefix crates/desktop run build
 
       - name: Run extreme test script
         env:
