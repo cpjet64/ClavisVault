@@ -253,6 +253,12 @@ mod tests {
         assert!(output.contains("- `AZURE_SECRET` – az"));
     }
 
+    #[test]
+    fn build_managed_section_formats_single_key_row() {
+        let output = build_managed_section(&key_map(), Utc::now());
+        assert!(output.contains("- `OPENAI_API_KEY` – OpenAI token"));
+    }
+
     #[derive(Clone)]
     struct FailingAtomicWriteFileOps {
         inner: LocalSafeFileOps,

@@ -50,6 +50,15 @@ impl LocalSafeFileOps {
     }
 
     fn atomic_replace_path(path: &Path) -> Result<PathBuf> {
+        Self::atomic_replace_path_with(path, || {
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        })
+    }
+
+    fn atomic_replace_path_with<F>(path: &Path, mut next_candidate_seed: F) -> Result<PathBuf>
+    where
+        F: FnMut() -> i64,
+    {
         let parent = path
             .parent()
             .ok_or_else(|| anyhow!("path has no parent: {}", path.display()))?;
@@ -59,10 +68,7 @@ impl LocalSafeFileOps {
             .to_string_lossy();
 
         for attempt in 0..8_usize {
-            let candidate = Utc::now()
-                .timestamp_nanos_opt()
-                .unwrap_or_default()
-                .saturating_add(attempt as i64);
+            let candidate = next_candidate_seed().saturating_add(attempt as i64);
             let candidate = parent.join(format!(".{file_name}.{candidate}.replace.bak"));
             if !candidate.exists() {
                 return Ok(candidate);
@@ -466,6 +472,28 @@ mod tests {
             .expect("replacement filename should exist");
         assert!(name.to_string_lossy().starts_with(".agents.md."));
         assert!(name.to_string_lossy().ends_with(".replace.bak"));
+    }
+
+    #[test]
+    fn atomic_replace_path_reports_exhausted_candidate_space() {
+        let root = temp_dir("safe-file-replace-exhausted");
+        let target = root.join("agents.md");
+        let fixed_seed = 4242_i64;
+
+        for attempt in 0..8_i64 {
+            let candidate = root.join(format!(
+                ".agents.md.{}.replace.bak",
+                fixed_seed.saturating_add(attempt)
+            ));
+            fs::write(candidate, b"busy").expect("candidate precreate should work");
+        }
+
+        let err = LocalSafeFileOps::atomic_replace_path_with(&target, || fixed_seed)
+            .expect_err("candidate exhaustion should fail");
+        assert!(
+            err.to_string()
+                .contains("failed to allocate atomic replacement file")
+        );
     }
 
     #[cfg(unix)]
