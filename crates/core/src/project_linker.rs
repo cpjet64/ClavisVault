@@ -321,8 +321,10 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         tx.send(Ok(notify::Event::default()))
             .expect("send first event should work");
-        tx.send(Err(notify::Error::generic("forced follow-up notify failure")))
-            .expect("send follow-up error should work");
+        tx.send(Err(notify::Error::generic(
+            "forced follow-up notify failure",
+        )))
+        .expect("send follow-up error should work");
 
         let err = linker
             .collect_events(&rx, Duration::from_millis(50))

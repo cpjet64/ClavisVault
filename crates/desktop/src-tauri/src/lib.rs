@@ -2268,20 +2268,16 @@ message: "Optional update"
         };
         let client_private_key = [0_u8; 32];
 
-        let result = request_remote_erase(
-            &remote,
-            "fingerprint",
-            &client_private_key,
-            &[],
-        )
-        .await;
+        let result = request_remote_erase(&remote, "fingerprint", &client_private_key, &[]).await;
 
         assert!(result.is_err());
-        assert!(result
-            .err()
-            .expect("error expected")
-            .to_string()
-            .contains("missing encrypted vault payload"));
+        assert!(
+            result
+                .err()
+                .expect("error expected")
+                .to_string()
+                .contains("missing encrypted vault payload")
+        );
     }
 
     #[test]

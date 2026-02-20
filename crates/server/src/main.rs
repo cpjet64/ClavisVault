@@ -1624,8 +1624,8 @@ mod tests {
             reason: None,
             encrypted_vault_hex: hex_of(&encrypted.to_bytes().expect("serialize")),
         };
-        let pair_response = handle_vault_push(&paths, &mut state, pair_request)
-            .expect("pair should work");
+        let pair_response =
+            handle_vault_push(&paths, &mut state, pair_request).expect("pair should work");
         let issued_token = pair_response
             .issued_token
             .expect("pairing should return token")
@@ -1648,7 +1648,10 @@ mod tests {
             encrypted_vault_hex: String::new(),
         };
         assert!(handle_vault_push(&paths, &mut state, erase_request).is_err());
-        assert_eq!(pre_erase_vault, fs::read(&paths.vault_file).expect("vault should remain"));
+        assert_eq!(
+            pre_erase_vault,
+            fs::read(&paths.vault_file).expect("vault should remain")
+        );
     }
 
     #[test]
@@ -1683,8 +1686,8 @@ mod tests {
             reason: None,
             encrypted_vault_hex: hex_of(&encrypted.to_bytes().expect("serialize")),
         };
-        let pair_response = handle_vault_push(&paths, &mut state, pair_request)
-            .expect("pair should work");
+        let pair_response =
+            handle_vault_push(&paths, &mut state, pair_request).expect("pair should work");
         let issued_token = pair_response
             .issued_token
             .expect("pairing should return token")
@@ -1707,7 +1710,10 @@ mod tests {
             encrypted_vault_hex: "not-a-hex-payload".to_string(),
         };
         assert!(handle_vault_push(&paths, &mut state, erase_request).is_err());
-        assert_eq!(pre_erase_vault, fs::read(&paths.vault_file).expect("vault should remain"));
+        assert_eq!(
+            pre_erase_vault,
+            fs::read(&paths.vault_file).expect("vault should remain")
+        );
     }
 
     #[test]

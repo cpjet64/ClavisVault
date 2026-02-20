@@ -202,7 +202,11 @@ mod tests {
             .expect("zip finish should work")
             .into_inner();
 
-        let err = decrypt_export(&encoded, passphrase).expect_err("decrypt should reject unsupported version");
-        assert!(err.to_string().contains("unsupported export format version"));
+        let err = decrypt_export(&encoded, passphrase)
+            .expect_err("decrypt should reject unsupported version");
+        assert!(
+            err.to_string()
+                .contains("unsupported export format version")
+        );
     }
 }

@@ -342,10 +342,11 @@ mod tests {
 
         let err = ops.backup(&target);
         assert!(err.is_err());
-        assert!(err
-            .unwrap_err()
-            .to_string()
-            .contains("failed to create empty backup"));
+        assert!(
+            err.unwrap_err()
+                .to_string()
+                .contains("failed to create empty backup")
+        );
     }
 
     #[test]
