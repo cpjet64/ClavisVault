@@ -3,6 +3,7 @@
 #[cfg(test)]
 use std::sync::OnceLock;
 use std::{
+    cmp::Reverse,
     collections::HashMap,
     env, fs,
     net::{SocketAddr, ToSocketAddrs},
@@ -2005,11 +2006,16 @@ async fn check_updates(
     let settings = state.lock_inner().map_err(err_to_string)?.settings.clone();
     if let Ok(alerts) = read_alerts(&app) {
         let now = Utc::now();
-        let selected = alerts
-            .into_iter()
-            .filter(|alert| alert_is_active_now(alert, now))
-            .filter(|alert| !alert_is_acknowledged(&settings, alert, now))
-            .max_by_key(|alert| if alert.critical { 2 } else { 1 });
+        let selected = dedupe_active_alerts(
+            alerts
+                .into_iter()
+                .filter(|alert| alert_is_active_now(alert, now))
+                .filter(|alert| !alert_is_acknowledged(&settings, alert, now))
+                .collect(),
+            now,
+        )
+        .into_iter()
+        .max_by_key(|alert| if alert.critical { 2 } else { 1 });
         status.critical_alert = selected.and_then(|alert| alert.critical.then_some(alert));
     }
 
@@ -2571,18 +2577,63 @@ fn alert_is_acknowledged(
     let Some(ack) = settings.alert_acknowledgements.get(&key) else {
         return false;
     };
-    if let Some(until_version) = ack.until_version.as_deref()
+    if let Some(until_version) = ack
+        .until_version
+        .as_deref()
+        .or(alert.ack_until_version.as_deref())
         && alert.version.as_str() <= until_version
     {
         return true;
     }
-    if let Some(until_date) = ack.until_date.as_deref()
+    if let Some(until_date) = ack
+        .until_date
+        .as_deref()
+        .or(alert.ack_until_date.as_deref())
         && let Ok(until) = parse_rfc3339_utc(until_date)
         && now <= until
     {
         return true;
     }
     false
+}
+
+fn dedupe_active_alerts(mut alerts: Vec<AlertInfo>, now: DateTime<Utc>) -> Vec<AlertInfo> {
+    alerts.sort_by_key(|alert| Reverse(alert_started_at(alert, now)));
+    let mut newest_by_key: HashMap<String, DateTime<Utc>> = HashMap::new();
+    let mut deduped = Vec::with_capacity(alerts.len());
+    for alert in alerts {
+        let key = alert_dedupe_key(&alert);
+        let started_at = alert_started_at(&alert, now);
+        if let Some(dedupe_hours) = alert.dedupe_hours
+            && let Some(newest) = newest_by_key.get(&key)
+            && newest.signed_duration_since(started_at)
+                <= ChronoDuration::hours(dedupe_hours as i64)
+        {
+            continue;
+        }
+        newest_by_key.insert(key, started_at);
+        deduped.push(alert);
+    }
+    deduped
+}
+
+fn alert_dedupe_key(alert: &AlertInfo) -> String {
+    alert.id.clone().unwrap_or_else(|| {
+        format!(
+            "{}:{}:{}",
+            alert.channel.clone().unwrap_or_default(),
+            alert.severity.clone().unwrap_or_default(),
+            alert.message
+        )
+    })
+}
+
+fn alert_started_at(alert: &AlertInfo, fallback: DateTime<Utc>) -> DateTime<Utc> {
+    alert
+        .starts_at
+        .as_deref()
+        .and_then(|value| parse_rfc3339_utc(value).ok())
+        .unwrap_or(fallback)
 }
 
 fn parse_rfc3339_utc(value: &str) -> Result<DateTime<Utc>> {
@@ -2758,6 +2809,89 @@ message: "Optional update"
         assert!(parsed[0].critical);
         assert_eq!(parsed[1].version, "0.1.6");
         assert!(!parsed[1].critical);
+    }
+
+    #[test]
+    fn dedupe_active_alerts_suppresses_duplicates_inside_window() {
+        let now = Utc::now();
+        let alerts = vec![
+            AlertInfo {
+                id: Some("same-alert".to_string()),
+                version: "0.1.2".to_string(),
+                critical: true,
+                severity: Some("critical".to_string()),
+                channel: Some("stable".to_string()),
+                dedupe_hours: Some(24),
+                starts_at: Some((now - ChronoDuration::hours(1)).to_rfc3339()),
+                ends_at: None,
+                ack_until_version: None,
+                ack_until_date: None,
+                message: "msg".to_string(),
+            },
+            AlertInfo {
+                id: Some("same-alert".to_string()),
+                version: "0.1.1".to_string(),
+                critical: true,
+                severity: Some("critical".to_string()),
+                channel: Some("stable".to_string()),
+                dedupe_hours: Some(24),
+                starts_at: Some((now - ChronoDuration::hours(2)).to_rfc3339()),
+                ends_at: None,
+                ack_until_version: None,
+                ack_until_date: None,
+                message: "msg".to_string(),
+            },
+            AlertInfo {
+                id: Some("different-alert".to_string()),
+                version: "0.1.0".to_string(),
+                critical: false,
+                severity: Some("info".to_string()),
+                channel: Some("stable".to_string()),
+                dedupe_hours: Some(24),
+                starts_at: Some((now - ChronoDuration::hours(3)).to_rfc3339()),
+                ends_at: None,
+                ack_until_version: None,
+                ack_until_date: None,
+                message: "msg2".to_string(),
+            },
+        ];
+
+        let deduped = dedupe_active_alerts(alerts, now);
+        assert_eq!(deduped.len(), 2);
+        assert!(
+            deduped
+                .iter()
+                .any(|alert| alert.id.as_deref() == Some("same-alert") && alert.version == "0.1.2")
+        );
+    }
+
+    #[test]
+    fn alert_acknowledgement_uses_alert_defaults_when_ack_fields_missing() {
+        let now = Utc::now();
+        let alert = AlertInfo {
+            id: Some("ack-defaults".to_string()),
+            version: "0.1.2".to_string(),
+            critical: true,
+            severity: Some("critical".to_string()),
+            channel: Some("stable".to_string()),
+            dedupe_hours: Some(24),
+            starts_at: None,
+            ends_at: None,
+            ack_until_version: Some("0.1.3".to_string()),
+            ack_until_date: None,
+            message: "ack test".to_string(),
+        };
+
+        let mut settings = DesktopSettings::default();
+        settings.alert_acknowledgements.insert(
+            "ack-defaults".to_string(),
+            AlertAcknowledgement {
+                until_version: None,
+                until_date: None,
+            },
+        );
+
+        assert!(alert_is_acknowledged(&settings, &alert, now));
     }
 
     #[test]
