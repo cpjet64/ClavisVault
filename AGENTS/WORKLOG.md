@@ -3,16 +3,18 @@
 ## Now
 - Repository is in `IN-PROGRESS` mode due `clavisvault-core` coverage debt.
 - Latest `cargo llvm-cov --package clavisvault-core --lib --summary-only`:
-  - Line coverage: `87.56%` (4,510 covered / 561 missed)
+  - Line coverage: `88.22%` (4,528 covered / 561 missed)
   - Function coverage: `79.16%` (451 covered / 94 missed)
 - Work is now gated by completing `AGENTS/COVERAGE_100_TODO.md` in strict file-level slices.
-- Platform-specific misses must be explicitly annotated in code with durable, reasoned `// COVERAGE NOTE` comments.
+- Added focused shell surface tests in this slice; `shell.rs` still has uncovered assignment/hook branch lines to address in the next slice.
+- `cargo llvm-cov --package clavisvault-core --lib --show-missing-lines` output is now used as the per-slice source of truth.
+- `--fail-under-lines 95` remains failing; this is expected at this stage.
 
 ## Next
-- Execute `AGENTS/COVERAGE_100_TODO.md` starting with:
-  1. `crates/core/src/shell.rs` branch-complete coverage for all hook + assignment branches.
-  2. `crates/core/src/types.rs` core type constructor + zeroization/migration branch coverage.
-  3. `crates/core/src/policy.rs` and `crates/core/src/rotation.rs` policy decision branches.
+- Continue `AGENTS/COVERAGE_100_TODO.md` with:
+  1. Finish `crates/core/src/shell.rs` remaining missed lines and move to:
+  2. `crates/core/src/types.rs` constructor/migration/ signer-matching branches.
+  3. `crates/core/src/policy.rs` and `crates/core/src/rotation.rs` remaining decision branches.
   4. `crates/core/src/audit_log.rs` and `crates/core/src/encryption.rs` integrity/error boundaries.
   5. `crates/core/src/safe_file.rs` and remaining edge branches in `openclaw.rs`, `project_linker.rs`, `recovery.rs`.
 - Run after each atomic slice:
@@ -34,7 +36,8 @@
 
 ## Evidence
 - `cargo llvm-cov --package clavisvault-core --lib --summary-only`
-- `cargo llvm-cov --package clavisvault-core --lib --show-missing-lines`
+- `cargo llvm-cov --package clavisvault-core --lib --show-missing-lines --output-path target/coverage-missing.txt`
+- `cargo llvm-cov --package clavisvault-core --lib --fail-under-lines 95` (fails at current slice)
 - `AGENTS/COVERAGE_100_TODO.md`
 - `rg -n "TODO|FIXME|XXX|HACK|not implemented|stub|unimplemented!|todo!|panic!\(|unreachable!\(" AGENTS/WORKLOG.md AGENTS/COVERAGE_100_TODO.md docs crates/core/src`
 

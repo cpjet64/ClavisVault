@@ -161,6 +161,8 @@ mod tests {
         let hooks = generate_all_hooks();
         assert_eq!(hooks.len(), 4);
         assert!(hooks.contains_key(&ShellKind::Bash));
+        assert!(hooks.contains_key(&ShellKind::Zsh));
+        assert!(hooks.contains_key(&ShellKind::Fish));
         assert!(hooks.contains_key(&ShellKind::Pwsh));
     }
 
@@ -168,6 +170,9 @@ mod tests {
     fn shell_env_assignment_uses_shell_safe_quotes() {
         let values = shell_env_assignment(ShellKind::Bash, "TOKEN", "va'lue");
         assert_eq!(values, "export TOKEN='va'\"'\"'lue'");
+
+        let zsh = shell_env_assignment(ShellKind::Zsh, "TOKEN", "va'lue");
+        assert_eq!(zsh, "export TOKEN='va'\"'\"'lue'");
 
         let fish = shell_env_assignment(ShellKind::Fish, "TOKEN", "va'lue");
         assert_eq!(fish, "set -gx TOKEN 'va'\"'\"'lue'");
@@ -264,6 +269,28 @@ mod tests {
             snippets
                 .iter()
                 .all(|snippet| !snippet.contains("CLAVISVAULT_SESSION_TOKEN='"))
+        );
+    }
+
+    #[test]
+    fn shell_session_token_file_snippets_cover_zsh_and_hide_secret() {
+        let snippets = shell_session_token_file_snippets(
+            ShellKind::Zsh,
+            "/tmp/zsh-token",
+            "/tmp/zsh-vault.cv",
+        );
+        assert_eq!(
+            snippets[0],
+            "export CLAVISVAULT_SESSION_TOKEN_FILE='/tmp/zsh-token'"
+        );
+        assert_eq!(
+            snippets[1],
+            "export CLAVISVAULT_VAULT_PATH='/tmp/zsh-vault.cv'"
+        );
+        assert!(
+            !snippets
+                .iter()
+                .any(|snippet| snippet.contains("CLAVISVAULT_SESSION_TOKEN='"))
         );
     }
 

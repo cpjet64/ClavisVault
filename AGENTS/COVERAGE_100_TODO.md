@@ -31,9 +31,10 @@
 ## TODO (priority order)
 
 1. Reduce misses in shell surface generation first (lowest risk, high gain)
-- [ ] Exercise both assignment formats for all shell variants and every branch in `shell_env_assignment` and `shell_session_token_file_snippets`.
-- [ ] Cover deterministic outputs for shell-safe quoting in all branches where currently only the happy path is asserted.
-- [ ] Add a one-time assertion that shell constants and env-var tokens are referenced from public API in tests.
+- [x] Add explicit coverage for `ShellKind::Zsh` in `shell_env_assignment` and `shell_session_token_file_snippets`.
+- [ ] Add explicit coverage for full hook payload constants on all variants in `shell_session_clear_snippets`.
+- [ ] Add explicit coverage for empty-value assignment semantics for `$Env:` (`shell_safe_pwsh_single_quote`) across all shells.
+- [ ] Add explicit validation that `shell_session_token_file_snippets` and `shell_env_assignments` avoid outputting legacy `CLAVISVAULT_SESSION_TOKEN` in token file flows.
 
 2. Expand deterministic branches in `crates/core/src/types.rs`
 - [ ] Add tests for:
