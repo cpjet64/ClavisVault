@@ -2662,6 +2662,16 @@ fn version_leq(current: &str, until: &str) -> bool {
                     return false;
                 }
             }
+            (Some(a), None) if r.is_none() => {
+                if a != 0 {
+                    return false;
+                }
+            }
+            (None, Some(b)) if l.is_none() => {
+                if b != 0 {
+                    return true;
+                }
+            }
             _ => return current <= until,
         }
     }
@@ -2949,6 +2959,15 @@ message: "Optional update"
             !alert_is_acknowledged(&settings, &alert, now),
             "0.1.10 must be newer than 0.1.9 with numeric comparison"
         );
+    }
+
+    #[test]
+    fn version_leq_treats_missing_segments_as_zero() {
+        assert!(version_leq("1", "1.0"));
+        assert!(version_leq("1.0", "1"));
+        assert!(version_leq("1.0.0", "1"));
+        assert!(!version_leq("1.0.1", "1"));
+        assert!(version_leq("1.2", "1.2.0"));
     }
 
     #[test]
