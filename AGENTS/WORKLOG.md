@@ -1,12 +1,12 @@
 # Worklog
 
 ## Now
-- Classified repository state as FINISHED/mostly complete after a clean standard-gate pass.
-- No remaining high-confidence blocked implementation stubs or test failures are visible in source.
+- Classified repository state as FINISHED/mostly complete after a full documented gate run (`just ci-deep`).
+- No remaining high-confidence blocked implementation stubs or failing tests are visible in source paths.
 
 ## Next
-- Resolve relay hardening decision points (destination cap behavior and legacy compatibility boundaries) once product direction is set.
-- Continue malformed-traffic load checks, then fold results into evidence once reproducible baselines are available.
+- Evaluate transitive security advisory allow-list pressure from `cargo audit` (GTK3/derivative/fxhash family).
+- Continue malformed-traffic relay hardening checks, then make an explicit relay drop-vs-hard-fail decision.
 
 ## Later
 - Optional: triage low-risk follow-up hardening based on future findings.
@@ -24,6 +24,12 @@
   - `shell_session_exports` / `shell_session_export_snippets` are no longer exposed from `crates/core/src/shell.rs`.
   - `clavisvault-cli` now only documents/uses token-file based env-load snippets; tests were tightened accordingly.
 - Added explicit compatibility gating for legacy `CLAVISVAULT_SESSION_TOKEN` env-var session-token fallback.
+- Ran `just ci-deep` end-to-end:
+  - Hygiene, fmt, clippy, machete, build, test-full, security, and docs completed.
+  - `213 tests run: 213 passed, 0 skipped`.
+  - `cargo deny check` passed.
+  - `cargo audit` and policy enforcement returned success with existing advisory allow-list.
+  - `cargo doc --no-deps --all-features` generated documentation.
 
 ## Done
 - Removed silent fallback for missing session signing key in CLI keyring:
@@ -64,6 +70,7 @@
 - Whether relay destination caps should be hard fail (disconnect sender) or silent drop with telemetry.
 - Whether legacy plain `--session-token` output compatibility should stay supported indefinitely in non-production mode.
 - Whether to gate legacy v1 import default as `warn` only or default to reject in CI mode without extra flag.
+- Whether to reduce desktop dependency risk by reworking transitive advisory-heavy crates or retaining allow-list with documented justification.
 
 ## Evidence
 - Reviewed `crates/core/src/export.rs`, `crates/core/src/types.rs`, `crates/core/src/policy.rs`, `crates/core/src/shell.rs`, `crates/core/src/audit_log.rs`.
@@ -72,6 +79,9 @@
 - Verified targeted relay regression path after assertion cleanup with:
   - `cargo fmt --check`
   - `cargo test -p clavisvault-relay destination_fanout_cap_causes_drop`
+- Full-gate verification evidence:
+  - `just ci-deep` completed and documented all phases (`ci-fast`, `test-full`, `coverage`, `security`, `docs`) as passing.
+  - Security policy script (`python scripts/enforce_advisory_policy.py`) remains green with allow-list entries only.
 
 ## Assumptions
 - No behavior changes should silently reduce CLI compatibility.
