@@ -97,3 +97,16 @@ Scope: Consolidated check of repository documentation against implementation sta
 - Server now supports token scope/revocation semantics (`scp`, `jti`, `rid`) and remote `revoke` command.
 - CLI expanded with `rotate-key`, `policy check`, `audit verify`, and `recovery-drill`.
 - Alert schema expanded in `docs/alerts.md` with structured metadata fields (`id`, `severity`, `channel`, `dedupe_hours`, schedules, ack hints).
+
+## Nice-to-have feature completion matrix (8/8)
+
+| Feature | Status | Evidence |
+| --- | --- | --- |
+| 1. Tamper-evident audit chain | ✅ Implemented | `crates/core/src/audit_log.rs`, `crates/desktop/src-tauri/src/lib.rs` (`verify_audit_chain`) |
+| 2. Rotation policies + expiry automation | ✅ Implemented | `crates/core/src/types.rs`, `crates/core/src/rotation.rs`, `crates/desktop/src/components/VaultTab.tsx`, `crates/desktop/src-tauri/src/lib.rs` (`list_rotation_findings`, `rotate_key`) |
+| 3. Hardware-backed key protection path | ✅ Implemented | `crates/desktop/src-tauri/src/lib.rs` (`hardware_backed_unlock_enabled`, keyring-backed unlock path) |
+| 4. Fine-grained remote trust policy | ✅ Implemented | `crates/desktop/src/lib/types.ts`, `crates/desktop/src/components/RemotesTab.tsx`, `crates/server/src/main.rs` (`scp`, `rid`, revoke handling) |
+| 5. Signed export/backup manifests | ✅ Implemented | `crates/core/src/export.rs` (manifest v2 signature + verification, legacy compatibility) |
+| 6. Policy-as-code secret hygiene | ✅ Implemented | `crates/core/src/policy.rs`, `policy/secret-policy.toml`, `crates/cli/src/main.rs` (`policy check`), desktop warning path in `crates/desktop/src-tauri/src/lib.rs` |
+| 7. Recovery workflow hardening | ✅ Implemented | `crates/core/src/recovery.rs`, `crates/desktop/src-tauri/src/lib.rs` (`run_recovery_drill`), `crates/cli/src/main.rs` (`recovery-drill`) |
+| 8. Alerting quality improvements | ✅ Implemented | `docs/alerts.md`, `crates/desktop/src-tauri/src/lib.rs` (parser fields, scheduling, acknowledgment filtering) |
