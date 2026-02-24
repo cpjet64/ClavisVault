@@ -1,33 +1,30 @@
 # Worklog
 
 ## Now
-- Classified repository as FINISHED/mostly complete from gates and marker scan:
-  - `just ci-fast` was run and is currently passing.
-  - Remaining risk is limited to security policy posture: advisory exceptions were still defined in `deny.toml` but `python scripts/validate_audit_exceptions.py` enforces zero-ignore policy for that file.
-- Current top-priority in-work item:
-  - Migrate advisory exception handling from `deny.toml` ignores to baseline-managed `security/advisory-baseline.toml` entries.
-- Classified repository state as FINISHED/mostly complete after the latest full documented gate and security verification reruns.
-- No remaining high-confidence blocked implementation stubs or failing tests are visible in source paths.
-- Re-ran advisory checks; only non-blocking informational advisories remain (known unmaintained/unsound transitive crates, no exploitable CVE findings).
+- Repository remains FINISHED/mostly complete after full required gates and high-confidence verification:
+  - `just ci-fast` passes (`hygiene`, `fmt`, `clippy`, `machete`, `build`, `test-quick`).
+  - 213 tests passed (`0` skipped) in the last quick suite.
+- Current in-progress work item is now closed: advisory-policy migration to baseline-managed exceptions is complete and stable.
+- Ongoing residual risk is transitive advisory debt in the desktop stack with known unmaintained crates; no exploitable vulnerabilities are reported.
 
 ## Next
-- Close the advisory-policy migration task by ensuring `deny.toml` is zero-ignore and `security/advisory-baseline.toml` contains all currently observed unmaintained/unsound advisories.
-- Keep tracking transitive advisory pressure in `security/advisory-baseline.toml` until dependency upgrades remove the GTK3-era/Unicode transitive chain.
-- Add a follow-up security review if/when relay protocol changes require additional malformed-traffic hardening.
+- Continue periodic security posture review:
+  - Validate `security/advisory-baseline.toml` every release against current `cargo deny` advisories output.
+  - Track the earliest baseline expiry date and prepare remediation plans before any entry expires.
+  - Add follow-up review when dependency upgrades become feasible for the desktop GTK path.
 
 ## Later
 - Optional: triage low-risk follow-up hardening based on future findings.
 
 ## Done
-- Completed advisory-policy migration for the new zero-ignore baseline workflow:
-  - Removed advisory entries from `deny.toml` `advisories.ignore` and left it empty for advisory suppression.
-  - Added observed unmaintained/unsound advisories to `security/advisory-baseline.toml` with expiry/rationale entries.
-  - Updated baseline to match active advisory set (`RUSTSEC-2024-0384`/`0388` added; stale `RUSTSEC-2024-0429` removed).
+- Completed advisory-policy migration for the zero-ignore baseline workflow:
+  - Migrated advisory handling from denied `advisories.ignore` entries to `security/advisory-baseline.toml`.
+  - Baseline includes the current observed advisory set (`RUSTSEC-2024-0370`, `2024-0384`, `2024-0388`, `2024-0411..0420`, `2025-0057`, `2025-0075`, `2025-0080`, `2025-0081`, `2025-0098`, `2025-0100`).
   - Verified:
     - `python scripts/validate_audit_exceptions.py --deny-toml deny.toml` returns 0.
     - `python scripts/enforce_advisory_policy.py` returns 0.
-    - `python scripts/validate_audit_exceptions_test.py` (7 tests) passes.
-    - `python scripts/enforce_advisory_policy_test.py` (7 tests) passes.
+    - `python scripts/validate_audit_exceptions_test.py` passes.
+    - `python scripts/enforce_advisory_policy_test.py` passes.
 - Completed repo-wide status refresh in-line with AGENTS/SPEC instructions:
   - `just ci-fast` (hygiene + fmt + clippy + machete + build + nextest) passes cleanly.
   - `213 tests run: 213 passed, 0 skipped` in the latest quick suite.
@@ -109,7 +106,7 @@
   - Security policy script (`python scripts/enforce_advisory_policy.py`) remains green with allow-list entries only.
 - Latest security sweep:
   - `cargo audit --json` reports no dependency vulnerabilities.
-  - Informational warnings remain for `atk`, `gtk` and related GTK3 bindings (`RUSTSEC-2024-0412`..`-0419`) plus several legacy/unmaintained crates (`RUSTSEC-2024-0384`, `RUSTSEC-2024-0370`, `RUSTSEC-2025-0080` family, `RUSTSEC-2024-0429` on `glib`).
+  - Informational warnings remain for `atk`, `gtk` and related GTK3 bindings (`RUSTSEC-2024-0412`..`-0419`) plus several legacy/unmaintained crates (`RUSTSEC-2024-0384`, `RUSTSEC-2024-0370`, `RUSTSEC-2025-0080` family).
 - Environment date used for evidence: 2026-02-24.
 
 ## Assumptions
