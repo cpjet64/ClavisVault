@@ -1,5 +1,6 @@
 services:
   server:
+    command: ["--data-dir", "/var/lib/clavisvault"]
     build:
       context: ..
       dockerfile: server-public/Dockerfile
