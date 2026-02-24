@@ -4,6 +4,7 @@
 - Repository remains classified as `FINISHED` / mostly complete after repeated production-risk verification.
 - Core verification remains green and no implementation stubs are active in production code.
 - Completed final panic/unreachable sweep focused on runtime crash risk in non-test code paths.
+- Latest sweep shows only docs placeholders (`docs/SPEC.md`, `docs/alerts.md`) and test-only panics/unreachables remain.
 
 ## Next
 - Proceed to optional low-priority maintenance backlog only if a specific trigger appears (coverage policy changes, new advisories, or explicit user request).
@@ -18,6 +19,9 @@
 - Confirmed remaining `panic!`/`unreachable!` instances are limited to `#[test]` modules.
 - Canonicalized worklog path to repository-defined `AGENTS/WORKLOG.md`.
 - Logged the latest risk/repo state evidence and assumptions.
+- Re-ran placeholder/crash-path scan across README/docs/crates:
+  - `rg -n "TODO|FIXME|XXX|HACK|not implemented|stub|unimplemented!|todo!|panic!\\(|unreachable!\\(" README.md docs crates/core crates/cli crates/server crates/relay crates/desktop crates/core/src`
+- Confirmed no new high-impact production-only gaps were found in this pass.
 
 ## Decisions Needed
 - None.
