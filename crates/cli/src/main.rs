@@ -18,8 +18,6 @@ use chacha20poly1305::{
     aead::{Aead, KeyInit},
 };
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-#[cfg(test)]
-use clavisvault_core::shell::shell_session_export_snippets;
 use clavisvault_core::{
     audit_log::{AuditIntegrityStatus, AuditLedger, verify_ledger_integrity},
     encryption::{derive_master_key, lock_vault, unlock_vault},
@@ -1604,53 +1602,6 @@ mod tests {
         assert_eq!(
             shell_assignments,
             vec!["$Env:TOKEN = 'va''lue with spaces'"]
-        );
-    }
-
-    #[test]
-    fn shell_session_exports_include_vault_path_and_token() {
-        let exports =
-            shell_session_export_snippets(ShellKind::Bash, "session-token", "C:/vaults/vault.cv");
-        assert_eq!(
-            exports,
-            vec![
-                "export CLAVISVAULT_SESSION_TOKEN='session-token'",
-                "export CLAVISVAULT_VAULT_PATH='C:/vaults/vault.cv'"
-            ]
-        );
-    }
-
-    #[test]
-    fn shell_session_export_snippets_handle_shell_specific_quotes() {
-        let token = "s3ss'ion/with spaces";
-        let path = "/tmp/my vault/vault.cv";
-        assert_eq!(
-            shell_session_export_snippets(ShellKind::Bash, token, path),
-            vec![
-                "export CLAVISVAULT_SESSION_TOKEN='s3ss'\"'\"'ion/with spaces'",
-                "export CLAVISVAULT_VAULT_PATH='/tmp/my vault/vault.cv'"
-            ]
-        );
-        assert_eq!(
-            shell_session_export_snippets(ShellKind::Zsh, token, path),
-            vec![
-                "export CLAVISVAULT_SESSION_TOKEN='s3ss'\"'\"'ion/with spaces'",
-                "export CLAVISVAULT_VAULT_PATH='/tmp/my vault/vault.cv'"
-            ]
-        );
-        assert_eq!(
-            shell_session_export_snippets(ShellKind::Fish, token, path),
-            vec![
-                "set -gx CLAVISVAULT_SESSION_TOKEN 's3ss'\"'\"'ion/with spaces'",
-                "set -gx CLAVISVAULT_VAULT_PATH '/tmp/my vault/vault.cv'"
-            ]
-        );
-        assert_eq!(
-            shell_session_export_snippets(ShellKind::Pwsh, token, path),
-            vec![
-                "$Env:CLAVISVAULT_SESSION_TOKEN = 's3ss''ion/with spaces'",
-                "$Env:CLAVISVAULT_VAULT_PATH = '/tmp/my vault/vault.cv'"
-            ]
         );
     }
 

@@ -1,7 +1,8 @@
 # Worklog
 
 ## Now
-- Continue deep-dive security sweep: complete server scope enforcement coverage across command, pairing, and revocation mismatch paths.
+- Complete relay hardening follow-up by removing plaintext session-env helper surface for env-load flows.
+- Keep validating relay trust-boundary and TTL/scoping behavior under load.
 
 ## Next
 - Continue deep-dive security sweep: relay trust-boundary hardening and scope/TTL mismatch checks under load.
@@ -15,6 +16,9 @@
 - Implemented remote scope propagation from desktop settings into pairing and push payloads, plus server-side scope enforcement and TTL policy mapping.
 - Added request validation and normalization for remote permissions/scopes; fixed compile regressions and stabilized the slice with unit coverage.
 - Added desktop startup normalization so invalid legacy permission values now fail closed with explicit mapping errors.
+- Removed deprecated plaintext session shell snippet API surface from core shell helpers and CLI tests.
+  - `shell_session_exports` / `shell_session_export_snippets` are no longer exposed from `crates/core/src/shell.rs`.
+  - `clavisvault-cli` now only documents/uses token-file based env-load snippets; tests were tightened accordingly.
 
 ## Done
 - Removed silent fallback for missing session signing key in CLI keyring:

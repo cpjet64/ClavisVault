@@ -103,28 +103,6 @@ pub fn shell_env_assignments<'a>(
         .collect()
 }
 
-pub fn shell_session_exports(
-    shell: ShellKind,
-    session_token: &str,
-    vault_path: &str,
-) -> Vec<String> {
-    shell_env_assignments(
-        shell,
-        [
-            (SESSION_TOKEN_ENV_VAR, session_token),
-            (VAULT_PATH_ENV_VAR, vault_path),
-        ],
-    )
-}
-
-pub fn shell_session_export_snippets(
-    shell: ShellKind,
-    session_token: &str,
-    vault_path: &str,
-) -> Vec<String> {
-    shell_session_exports(shell, session_token, vault_path)
-}
-
 pub fn shell_session_token_file_snippets(
     shell: ShellKind,
     token_file: &str,
@@ -205,60 +183,6 @@ mod tests {
             shell_env_assignments(ShellKind::Bash, pairs.iter().map(|(k, v)| (*k, *v)));
         assert_eq!(assignments.len(), 3);
         assert_eq!(assignments[0], "export A='one'");
-    }
-
-    #[test]
-    fn shell_session_exports_include_token_and_vault_path() {
-        let assignments = shell_session_exports(ShellKind::Bash, "token-value", "/tmp/vault.cv");
-        assert_eq!(
-            assignments,
-            vec![
-                "export CLAVISVAULT_SESSION_TOKEN='token-value'",
-                "export CLAVISVAULT_VAULT_PATH='/tmp/vault.cv'"
-            ]
-        );
-    }
-
-    #[test]
-    fn shell_session_export_snippets_support_all_shells() {
-        let token = "va'lue with spaces";
-        let vault_path = "C:/vaults/vault.cv";
-
-        let bash = shell_session_export_snippets(ShellKind::Bash, token, vault_path);
-        assert_eq!(
-            bash,
-            vec![
-                "export CLAVISVAULT_SESSION_TOKEN='va'\"'\"'lue with spaces'",
-                "export CLAVISVAULT_VAULT_PATH='C:/vaults/vault.cv'"
-            ]
-        );
-
-        let zsh = shell_session_export_snippets(ShellKind::Zsh, token, vault_path);
-        assert_eq!(
-            zsh,
-            vec![
-                "export CLAVISVAULT_SESSION_TOKEN='va'\"'\"'lue with spaces'",
-                "export CLAVISVAULT_VAULT_PATH='C:/vaults/vault.cv'"
-            ]
-        );
-
-        let fish = shell_session_export_snippets(ShellKind::Fish, token, vault_path);
-        assert_eq!(
-            fish,
-            vec![
-                "set -gx CLAVISVAULT_SESSION_TOKEN 'va'\"'\"'lue with spaces'",
-                "set -gx CLAVISVAULT_VAULT_PATH 'C:/vaults/vault.cv'"
-            ]
-        );
-
-        let pwsh = shell_session_export_snippets(ShellKind::Pwsh, token, vault_path);
-        assert_eq!(
-            pwsh,
-            vec![
-                "$Env:CLAVISVAULT_SESSION_TOKEN = 'va''lue with spaces'",
-                "$Env:CLAVISVAULT_VAULT_PATH = 'C:/vaults/vault.cv'"
-            ]
-        );
     }
 
     #[test]
