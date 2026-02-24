@@ -2581,7 +2581,7 @@ fn alert_is_acknowledged(
         .until_version
         .as_deref()
         .or(alert.ack_until_version.as_deref())
-        && alert.version.as_str() <= until_version
+        && version_leq(&alert.version, until_version)
     {
         return true;
     }
@@ -2640,6 +2640,31 @@ fn parse_rfc3339_utc(value: &str) -> Result<DateTime<Utc>> {
     let parsed = DateTime::parse_from_rfc3339(value)
         .with_context(|| format!("invalid RFC3339 timestamp: {value}"))?;
     Ok(parsed.with_timezone(&Utc))
+}
+
+fn version_leq(current: &str, until: &str) -> bool {
+    let mut left = current.split('.');
+    let mut right = until.split('.');
+    loop {
+        let l = left.next();
+        let r = right.next();
+        if l.is_none() && r.is_none() {
+            return true;
+        }
+        let l_num = l.and_then(|s| s.parse::<u64>().ok());
+        let r_num = r.and_then(|s| s.parse::<u64>().ok());
+        match (l_num, r_num) {
+            (Some(a), Some(b)) => {
+                if a < b {
+                    return true;
+                }
+                if a > b {
+                    return false;
+                }
+            }
+            _ => return current <= until,
+        }
+    }
 }
 
 fn build_tray(app: &AppHandle) -> Result<()> {
@@ -2892,6 +2917,38 @@ message: "Optional update"
         );
 
         assert!(alert_is_acknowledged(&settings, &alert, now));
+    }
+
+    #[test]
+    fn alert_acknowledgement_uses_numeric_version_ordering() {
+        let now = Utc::now();
+        let alert = AlertInfo {
+            id: Some("ack-version-order".to_string()),
+            version: "0.1.10".to_string(),
+            critical: true,
+            severity: Some("critical".to_string()),
+            channel: Some("stable".to_string()),
+            dedupe_hours: Some(24),
+            starts_at: None,
+            ends_at: None,
+            ack_until_version: Some("0.1.9".to_string()),
+            ack_until_date: None,
+            message: "ack order".to_string(),
+        };
+
+        let mut settings = DesktopSettings::default();
+        settings.alert_acknowledgements.insert(
+            "ack-version-order".to_string(),
+            AlertAcknowledgement {
+                until_version: None,
+                until_date: None,
+            },
+        );
+
+        assert!(
+            !alert_is_acknowledged(&settings, &alert, now),
+            "0.1.10 must be newer than 0.1.9 with numeric comparison"
+        );
     }
 
     #[test]
