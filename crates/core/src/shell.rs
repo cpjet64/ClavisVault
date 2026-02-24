@@ -191,6 +191,20 @@ mod tests {
     }
 
     #[test]
+    fn shell_env_assignments_cover_all_shells() {
+        let pairs = [("TOKEN", "value")];
+        let bash = shell_env_assignments(ShellKind::Bash, pairs);
+        let zsh = shell_env_assignments(ShellKind::Zsh, pairs);
+        let fish = shell_env_assignments(ShellKind::Fish, pairs);
+        let pwsh = shell_env_assignments(ShellKind::Pwsh, pairs);
+
+        assert_eq!(bash, vec!["export TOKEN='value'"]);
+        assert_eq!(zsh, vec!["export TOKEN='value'"]);
+        assert_eq!(fish, vec!["set -gx TOKEN 'value'"]);
+        assert_eq!(pwsh, vec!["$Env:TOKEN = 'value'"]);
+    }
+
+    #[test]
     fn shell_kind_as_str_returns_expected_values() {
         assert_eq!(ShellKind::Bash.as_str(), "bash");
         assert_eq!(ShellKind::Zsh.as_str(), "zsh");
@@ -225,6 +239,13 @@ mod tests {
                 "$Env:CLAVISVAULT_VAULT_PATH = ''"
             ]
         );
+    }
+
+    #[test]
+    fn shell_constants_match_expected_values() {
+        assert_eq!(SESSION_TOKEN_ENV_VAR, "CLAVISVAULT_SESSION_TOKEN");
+        assert_eq!(SESSION_TOKEN_FILE_ENV_VAR, "CLAVISVAULT_SESSION_TOKEN_FILE");
+        assert_eq!(VAULT_PATH_ENV_VAR, "CLAVISVAULT_VAULT_PATH");
     }
 
     #[test]
