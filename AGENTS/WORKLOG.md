@@ -1,12 +1,13 @@
 # Worklog
 
 ## Now
-- Classified repository state as FINISHED/mostly complete after a full documented gate run (`just ci-deep`).
+- Classified repository state as FINISHED/mostly complete after the latest full documented gate and security verification reruns.
 - No remaining high-confidence blocked implementation stubs or failing tests are visible in source paths.
+- Re-ran advisory checks; only non-blocking informational advisories remain (known unmaintained/unsound transitive crates, no exploitable CVE findings).
 
 ## Next
-- Evaluate transitive security advisory allow-list pressure from `cargo audit` (GTK3/derivative/fxhash family).
-- Continue malformed-traffic relay hardening checks, then make an explicit relay drop-vs-hard-fail decision.
+- Keep tracking transitive advisory pressure in `scripts/advisory_allowlist.json` until Tauri/GUI dependency graph upgrades away from GTK3-era crates.
+- Add a follow-up security review if/when relay protocol changes require additional malformed-traffic hardening.
 
 ## Later
 - Optional: triage low-risk follow-up hardening based on future findings.
@@ -82,6 +83,10 @@
 - Full-gate verification evidence:
   - `just ci-deep` completed and documented all phases (`ci-fast`, `test-full`, `coverage`, `security`, `docs`) as passing.
   - Security policy script (`python scripts/enforce_advisory_policy.py`) remains green with allow-list entries only.
+- Latest security sweep:
+  - `cargo audit --json` reports no dependency vulnerabilities.
+  - Informational warnings remain for `atk`, `gtk` and related GTK3 bindings (`RUSTSEC-2024-0412`..`-0419`) plus several legacy/unmaintained crates (`RUSTSEC-2024-0384`, `RUSTSEC-2024-0370`, `RUSTSEC-2025-0080` family, `RUSTSEC-2024-0429` on `glib`).
+- Environment date used for evidence: 2026-02-24.
 
 ## Assumptions
 - No behavior changes should silently reduce CLI compatibility.
