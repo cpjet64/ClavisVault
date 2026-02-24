@@ -1669,6 +1669,116 @@ mod tests {
     }
 
     #[test]
+    fn revoke_command_rejects_non_revoke_scopes() {
+        let root = temp_dir("revoke-scope-mismatch");
+        let paths = sample_paths(&root);
+        let mut state = ServerStateFile::default();
+        let mut salt = [0_u8; 16];
+        rand::rngs::OsRng.fill_bytes(&mut salt);
+        let key = derive_master_key("pw-revoke-scope", &salt).expect("derive should work");
+        let encrypted = lock_vault(paths.vault_file.clone(), &VaultData::new(salt), &key)
+            .expect("encrypt should work");
+        let encrypted_vault = encrypted.to_bytes().expect("serialize should work");
+        state.password = Some(PasswordRecord {
+            salt,
+            digest_hex: hex_of(Sha256::digest(key.as_slice()).as_ref()),
+        });
+        let challenge = ensure_pairing_challenge(&mut state);
+
+        let pair_request = PushRequest {
+            token: None,
+            pairing_code: Some(format!("{}-{}", challenge.code, challenge.checksum)),
+            password: Some("pw-revoke-scope".to_string()),
+            client_fingerprint: Some("scope-client-revoke".to_string()),
+            server_fingerprint: None,
+            command: None,
+            reason: None,
+            requested_scopes: Some(vec!["push".to_string(), "erase".to_string()]),
+            session_ttl_seconds: None,
+            encrypted_vault_hex: hex_of(&encrypted_vault),
+        };
+        let pair_response =
+            handle_vault_push(&paths, &mut state, pair_request).expect("pairing should work");
+        let token = pair_response
+            .issued_token
+            .expect("pairing should issue token");
+
+        let revoke_request = PushRequest {
+            token: Some(token),
+            pairing_code: None,
+            password: None,
+            client_fingerprint: Some("scope-client-revoke".to_string()),
+            server_fingerprint: Some(
+                state
+                    .bound_server_fingerprint
+                    .clone()
+                    .expect("pairing should bind server fingerprint"),
+            ),
+            command: Some(REMOTE_COMMAND_REVOKE.to_string()),
+            reason: Some("scope check".to_string()),
+            requested_scopes: Some(vec!["push".to_string(), "erase".to_string()]),
+            session_ttl_seconds: None,
+            encrypted_vault_hex: hex_of(&encrypted_vault),
+        };
+
+        assert!(handle_vault_push(&paths, &mut state, revoke_request).is_err());
+    }
+
+    #[test]
+    fn revoke_command_requires_matching_remote_id_binding() {
+        let root = temp_dir("revoke-remote-id-mismatch");
+        let paths = sample_paths(&root);
+        let mut state = ServerStateFile::default();
+        let mut salt = [0_u8; 16];
+        rand::rngs::OsRng.fill_bytes(&mut salt);
+        let key = derive_master_key("pw-revoke-rid", &salt).expect("derive should work");
+        let encrypted = lock_vault(paths.vault_file.clone(), &VaultData::new(salt), &key)
+            .expect("encrypt should work");
+        let encrypted_vault = encrypted.to_bytes().expect("serialize should work");
+        state.password = Some(PasswordRecord {
+            salt,
+            digest_hex: hex_of(Sha256::digest(key.as_slice()).as_ref()),
+        });
+        let challenge = ensure_pairing_challenge(&mut state);
+        let pair_request = PushRequest {
+            token: None,
+            pairing_code: Some(format!("{}-{}", challenge.code, challenge.checksum)),
+            password: Some("pw-revoke-rid".to_string()),
+            client_fingerprint: Some("scope-client-rid".to_string()),
+            server_fingerprint: None,
+            command: None,
+            reason: None,
+            requested_scopes: Some(vec!["revoke".to_string()]),
+            session_ttl_seconds: None,
+            encrypted_vault_hex: hex_of(&encrypted_vault),
+        };
+        let pair_response =
+            handle_vault_push(&paths, &mut state, pair_request).expect("pairing should work");
+        let token = pair_response
+            .issued_token
+            .expect("pairing should issue token");
+
+        let revoke_request = PushRequest {
+            token: Some(token),
+            pairing_code: None,
+            password: None,
+            client_fingerprint: Some("scope-client-rid-2".to_string()),
+            server_fingerprint: Some(
+                state
+                    .bound_server_fingerprint
+                    .clone()
+                    .expect("pairing should bind server fingerprint"),
+            ),
+            command: Some(REMOTE_COMMAND_REVOKE.to_string()),
+            reason: Some("rid mismatch".to_string()),
+            requested_scopes: Some(vec!["revoke".to_string()]),
+            session_ttl_seconds: None,
+            encrypted_vault_hex: hex_of(&encrypted_vault),
+        };
+        assert!(handle_vault_push(&paths, &mut state, revoke_request).is_err());
+    }
+
+    #[test]
     fn set_and_verify_password_round_trip() {
         let root = temp_dir("password");
         let paths = sample_paths(&root);
