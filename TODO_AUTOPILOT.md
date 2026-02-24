@@ -26,6 +26,8 @@
 - Added explicit “Unimplemented requirement register” section to `masterplan.md` (currently empty / none identified).
 - Hardened alert version acknowledgement comparison fallback to fail-closed on non-numeric version segments.
 - Added regression test `version_leq_rejects_non_numeric_segments`.
+- Hardened recovery drill export validation: export verification now fails explicitly when export passphrase is missing/empty.
+- Added `core` regression tests for recovery drill export verification with and without passphrase.
 
 ## Decisions Needed
 - None.

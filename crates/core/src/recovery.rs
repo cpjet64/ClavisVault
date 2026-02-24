@@ -71,7 +71,24 @@ pub fn run_recovery_drill(
     if let Some(path) = export_path {
         match std::fs::read(path) {
             Ok(bytes) => {
-                let decoded = decrypt_export_with_metadata(&bytes, export_passphrase.unwrap_or(""));
+                let passphrase = export_passphrase
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty());
+                let Some(passphrase) = passphrase else {
+                    checks.push(RecoveryCheck {
+                        name: "export_verify".to_string(),
+                        ok: false,
+                        detail: "export verification skipped: missing export passphrase"
+                            .to_string(),
+                    });
+                    let success = checks.iter().all(|check| check.ok);
+                    return RecoveryReport {
+                        started_at,
+                        success,
+                        checks,
+                    };
+                };
+                let decoded = decrypt_export_with_metadata(&bytes, passphrase);
                 checks.push(RecoveryCheck {
                     name: "export_verify".to_string(),
                     ok: decoded.is_ok(),
@@ -98,5 +115,96 @@ pub fn run_recovery_drill(
         started_at,
         success,
         checks,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        fs,
+        path::PathBuf,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    use chrono::Utc;
+
+    use crate::{
+        export::encrypt_export,
+        types::{KeyEntry, VaultData},
+    };
+
+    use super::run_recovery_drill;
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after unix epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("clavisvault-recovery-{tag}-{stamp}"));
+        fs::create_dir_all(&path).expect("temp dir should be creatable");
+        path
+    }
+
+    fn fixture_vault() -> VaultData {
+        let mut vault = VaultData::new([7u8; 16]);
+        let now = Utc::now();
+        vault.keys.insert(
+            "RECOVERY_TEST_KEY".to_string(),
+            KeyEntry {
+                name: "RECOVERY_TEST_KEY".to_string(),
+                description: "recovery".to_string(),
+                tags: Vec::new(),
+                last_updated: now,
+                created_at: now,
+                expires_at: None,
+                rotation_period_days: None,
+                warn_before_days: None,
+                last_rotated_at: Some(now),
+                owner: None,
+                secret: Some("value".to_string()),
+            },
+        );
+        vault
+    }
+
+    #[test]
+    fn recovery_drill_requires_export_passphrase_when_export_is_provided() {
+        let dir = temp_dir("missing-passphrase");
+        let vault_path = dir.join("vault.cv");
+        fs::write(&vault_path, b"not-an-encrypted-vault").expect("seed vault fixture should write");
+
+        let export_bytes =
+            encrypt_export(&fixture_vault(), "export-passphrase").expect("export should encrypt");
+        let export_path = dir.join("vault.cvx");
+        fs::write(&export_path, export_bytes).expect("export fixture should write");
+
+        let report = run_recovery_drill(&vault_path, Some(&export_path), None);
+        let check = report
+            .checks
+            .iter()
+            .find(|entry| entry.name == "export_verify")
+            .expect("export check should exist");
+        assert!(!check.ok);
+        assert!(check.detail.contains("missing export passphrase"));
+    }
+
+    #[test]
+    fn recovery_drill_verifies_export_when_passphrase_is_provided() {
+        let dir = temp_dir("with-passphrase");
+        let vault_path = dir.join("vault.cv");
+        fs::write(&vault_path, b"not-an-encrypted-vault").expect("seed vault fixture should write");
+
+        let export_bytes =
+            encrypt_export(&fixture_vault(), "export-passphrase").expect("export should encrypt");
+        let export_path = dir.join("vault.cvx");
+        fs::write(&export_path, export_bytes).expect("export fixture should write");
+
+        let report = run_recovery_drill(&vault_path, Some(&export_path), Some("export-passphrase"));
+        let check = report
+            .checks
+            .iter()
+            .find(|entry| entry.name == "export_verify")
+            .expect("export check should exist");
+        assert!(check.ok, "{}", check.detail);
     }
 }
