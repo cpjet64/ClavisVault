@@ -1,12 +1,12 @@
 # Worklog
 
 ## Now
-- Finalizing relay stress-hardening and finishing the legacy-import policy surface in UI/docs/settings plumbing.
+- Validate remaining high-risk startup and session-handoff paths after the desktop identity repair changes.
 
 ## Next
-- Stage and commit the remaining relay stress/drop tests plus settings/signing-policy surface changes.
-- Run targeted tests for any file staged in the next atomic commit.
-- Update AGENTS/WORKLOG after commit completion with final pass results.
+- Run a focused pass on CLI session-token compatibility warnings and relay hardening telemetry behavior.
+- Stage and commit the next highest-confidence hardening slice once validation completes.
+- Update AGENTS/WORKLOG after that commit.
 
 ## Later
 - Finalize any remaining docs/notes cleanup (masterplan/alerts migration notes).
@@ -21,6 +21,7 @@
   - `shell` command export test paths now avoid post-initialization mutation of defaults.
   - CLI session-cache/signer test helpers avoid unnecessary `return` statements.
   - Server token verification logic now uses explicit combined checks.
+- Hardened desktop settings startup path so invalid cached remote identity material is repaired in-place instead of panicking.
 
 ## Decisions Needed
 - Export signer persistence location and migration model: server-side keyring + explicit migration mode or dedicated CLI-managed trust file.

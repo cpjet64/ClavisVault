@@ -368,6 +368,19 @@ fn resolve_remote_client_identity(settings: &mut DesktopSettings) -> Result<()> 
     Ok(())
 }
 
+fn resolve_remote_client_identity_or_repair(settings: &mut DesktopSettings) {
+    if resolve_remote_client_identity(settings).is_err() {
+        if cfg!(not(test)) {
+            eprintln!(
+                "warning: failed to resolve remote client identity from stored settings; regenerating defaults"
+            );
+        }
+        let private_key = random_remote_client_private_key_bytes();
+        settings.remote_client_private_key = Some(hex_of(private_key.as_slice()));
+        settings.remote_client_fingerprint = remote_client_fingerprint_from_private(&private_key);
+    }
+}
+
 fn remote_client_private_key_bytes(settings: &DesktopSettings) -> Result<[u8; 32]> {
     let private_key = settings
         .remote_client_private_key
@@ -405,9 +418,7 @@ impl Default for DesktopSettings {
             remotes: Vec::new(),
         };
 
-        if let Err(err) = resolve_remote_client_identity(&mut settings) {
-            panic!("failed to initialize default remote client identity: {err}");
-        }
+        resolve_remote_client_identity_or_repair(&mut settings);
         settings
     }
 }
@@ -3602,6 +3613,25 @@ message: "Optional update"
                 .first()
                 .is_some_and(|remote| remote.session_token.is_none())
         );
+    }
+
+    #[test]
+    fn desktop_settings_repair_invalid_remote_client_identity() {
+        let mut settings = DesktopSettings {
+            remote_client_private_key: Some("not-a-hex-key".to_string()),
+            ..DesktopSettings::default()
+        };
+        resolve_remote_client_identity_or_repair(&mut settings);
+
+        let raw_private_key = settings
+            .remote_client_private_key
+            .as_deref()
+            .expect("remote client private key should be present after repair");
+        assert!(
+            remote_client_private_key_from_hex(raw_private_key).is_some(),
+            "invalid identity should be repaired to a valid private key"
+        );
+        assert_eq!(settings.remote_client_fingerprint.len(), 64);
     }
 
     #[test]
