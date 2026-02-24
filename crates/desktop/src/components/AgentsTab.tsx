@@ -27,20 +27,20 @@ export function AgentsTab({ linkedFiles, watchFolders, onSync }: AgentsTabProps)
       <GlassCard>
         <div className="grid gap-4 lg:grid-cols-2">
           <div className="space-y-2">
-            <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-text/70">Linked Files</h3>
+            <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-accent/70">Linked Files</h3>
             <textarea
               value={localLinked}
               onChange={(event) => setLocalLinked(event.target.value)}
-              className="h-40 w-full rounded-lg border border-white/15 bg-surface/70 p-3 text-xs text-text outline-none"
+              className="h-40 w-full rounded-lg border border-accent/20 bg-surface/70 p-3 text-xs text-text outline-none"
               placeholder="C:\\repo\\project\\AGENTS.md"
             />
           </div>
           <div className="space-y-2">
-            <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-text/70">Watch Folders</h3>
+            <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-accent/70">Watch Folders</h3>
             <textarea
               value={localFolders}
               onChange={(event) => setLocalFolders(event.target.value)}
-              className="h-40 w-full rounded-lg border border-white/15 bg-surface/70 p-3 text-xs text-text outline-none"
+              className="h-40 w-full rounded-lg border border-accent/20 bg-surface/70 p-3 text-xs text-text outline-none"
               placeholder="C:\\repo\\projects"
             />
           </div>
@@ -51,7 +51,7 @@ export function AgentsTab({ linkedFiles, watchFolders, onSync }: AgentsTabProps)
             value={openclawPath}
             onChange={(event) => setOpenclawPath(event.target.value)}
             placeholder="OpenClaw JSON path"
-            className="rounded-lg border border-white/15 bg-surface/70 px-3 py-2 text-sm text-text outline-none"
+            className="rounded-lg border border-accent/20 bg-surface/70 px-3 py-2 text-sm text-text outline-none"
           />
           <button
             type="button"
@@ -77,7 +77,7 @@ export function AgentsTab({ linkedFiles, watchFolders, onSync }: AgentsTabProps)
       </GlassCard>
 
       <GlassCard>
-        <h3 className="mb-3 text-sm font-semibold uppercase tracking-[0.16em] text-text/70">Latest Result</h3>
+        <h3 className="mb-3 text-sm font-semibold uppercase tracking-[0.16em] text-accent/70">Latest Result</h3>
         {lastSync ? (
           <div className="space-y-2 text-sm text-text/80">
             <p>

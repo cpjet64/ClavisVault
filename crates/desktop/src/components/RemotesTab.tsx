@@ -67,7 +67,7 @@ export function RemotesTab({ enabled, remotes, onAddRemote, onRemoveRemote }: Re
             <h2 className="text-lg font-semibold text-text">Remotes</h2>
             <p className="text-sm text-text/70">QUIC + Noise pairing state for server sync.</p>
           </div>
-          <div className="inline-flex items-center gap-2 rounded-lg border border-white/20 bg-surface/60 px-3 py-2 text-sm text-text/80">
+          <div className="inline-flex items-center gap-2 rounded-lg border border-accent/25 bg-surface/60 px-3 py-2 text-sm text-accent/80">
             <Signal className="h-4 w-4" />
             {enabled ? "Server sync enabled" : "Server sync disabled"}
           </div>
@@ -75,15 +75,15 @@ export function RemotesTab({ enabled, remotes, onAddRemote, onRemoveRemote }: Re
       </GlassCard>
 
       {!enabled ? (
-        <GlassCard className="border-dashed border-amber-200/35">
-          <p className="text-sm text-amber-100/90">
+        <GlassCard className="border-dashed border-accent/35">
+          <p className="text-sm text-accent/90">
             Enable `Server Sync` in Settings before adding remotes.
           </p>
         </GlassCard>
       ) : null}
 
       <GlassCard>
-        <h3 className="mb-3 text-sm font-semibold uppercase tracking-[0.16em] text-text/70">Add New Remote</h3>
+        <h3 className="mb-3 text-sm font-semibold uppercase tracking-[0.16em] text-accent/70">Add New Remote</h3>
         <p className="mb-3 text-xs text-text/70">Endpoint accepts IP:port or hostname. Pairing code and server fingerprint are required.</p>
         <form
           className="grid gap-3 md:grid-cols-2"
@@ -118,28 +118,28 @@ export function RemotesTab({ enabled, remotes, onAddRemote, onRemoveRemote }: Re
             value={name}
             onChange={(event) => setName(event.target.value)}
             placeholder="Remote name"
-            className="rounded-lg border border-white/15 bg-surface/70 px-3 py-2 text-sm text-text outline-none"
+            className="rounded-lg border border-accent/20 bg-surface/70 px-3 py-2 text-sm text-text outline-none"
             required
           />
           <input
             value={endpoint}
             onChange={(event) => setEndpoint(event.target.value)}
             placeholder="host:port (example: 10.0.0.5:51820)"
-            className={endpoint.trim() && !endpointIsValid ? "rounded-lg border border-rose-300 bg-rose-950/20 px-3 py-2 text-sm text-text outline-none" : "rounded-lg border border-white/15 bg-surface/70 px-3 py-2 text-sm text-text outline-none"}
+            className={endpoint.trim() && !endpointIsValid ? "rounded-lg border border-rose-300 bg-rose-950/20 px-3 py-2 text-sm text-text outline-none" : "rounded-lg border border-accent/20 bg-surface/70 px-3 py-2 text-sm text-text outline-none"}
             required
           />
           <input
             value={pairingCode}
             onChange={(event) => setPairingCode(event.target.value)}
             placeholder="Pairing code"
-            className="rounded-lg border border-white/15 bg-surface/70 px-3 py-2 text-sm text-text outline-none"
+            className="rounded-lg border border-accent/20 bg-surface/70 px-3 py-2 text-sm text-text outline-none"
             required
           />
           <input
             value={relayFingerprint}
             onChange={(event) => setRelayFingerprint(event.target.value)}
             placeholder="Server fingerprint (SHA-256 hex)"
-            className="rounded-lg border border-white/15 bg-surface/70 px-3 py-2 text-sm text-text outline-none"
+            className="rounded-lg border border-accent/20 bg-surface/70 px-3 py-2 text-sm text-text outline-none"
             required
           />
           <button
@@ -153,19 +153,19 @@ export function RemotesTab({ enabled, remotes, onAddRemote, onRemoveRemote }: Re
 
         {submitError ? <p className="mt-3 text-xs text-rose-200">{submitError}</p> : null}
         {latestProof ? (
-          <div className="mt-3 rounded-lg border border-white/10 bg-surface/50 p-3 text-xs text-text/75">
+          <div className="mt-3 rounded-lg border border-accent/10 bg-surface/50 p-3 text-xs text-text/75">
             Noise proof: <span className="font-mono">{latestProof}</span>
           </div>
         ) : null}
       </GlassCard>
 
       <GlassCard>
-        <h3 className="mb-3 text-sm font-semibold uppercase tracking-[0.16em] text-text/70">Configured Remotes</h3>
+        <h3 className="mb-3 text-sm font-semibold uppercase tracking-[0.16em] text-accent/70">Configured Remotes</h3>
         <div className="space-y-2">
           {remotes.map((remote) => (
             <div
               key={remote.id}
-              className="flex flex-col gap-2 rounded-lg border border-white/10 bg-surface/45 p-3 md:flex-row md:items-center md:justify-between"
+              className="flex flex-col gap-2 rounded-lg border border-accent/10 bg-surface/45 p-3 transition hover:border-accent/25 md:flex-row md:items-center md:justify-between"
             >
               <div>
                 <div className="flex items-center gap-2 text-sm font-semibold text-text">
@@ -186,7 +186,7 @@ export function RemotesTab({ enabled, remotes, onAddRemote, onRemoveRemote }: Re
             </div>
           ))}
           {remotes.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-white/15 p-3 text-sm text-text/60">No remotes configured.</div>
+            <div className="rounded-lg border border-dashed border-accent/15 p-3 text-sm text-text/60">No remotes configured.</div>
           ) : null}
         </div>
       </GlassCard>

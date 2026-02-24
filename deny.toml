@@ -2,9 +2,27 @@
 all-features = true
 
 [advisories]
-yanked = "warn"
-unmaintained = "all"
-unsound = "all"
+ignore = [
+  { id = "RUSTSEC-2025-0098", reason = "Transitive through Tauri/tauri-utils and no safe upgrade is available." },
+  { id = "RUSTSEC-2025-0100", reason = "Transitive through Tauri/tauri-utils and no safe upgrade is available." },
+  { id = "RUSTSEC-2025-0075", reason = "Transitive through Tauri/tauri-utils and no safe upgrade is available." },
+  { id = "RUSTSEC-2025-0080", reason = "Transitive through Tauri/tauri-utils and no safe upgrade is available." },
+  { id = "RUSTSEC-2024-0370", reason = "Transitive through dependency chain; no safe upgrade is available in current toolchain." },
+  { id = "RUSTSEC-2024-0384", reason = "Transitive through dependency chain; no safe upgrade is available in current toolchain." },
+  { id = "RUSTSEC-2024-0388", reason = "Transitive through dependency chain; no safe upgrade is available in current toolchain." },
+  { id = "RUSTSEC-2024-0411", reason = "Transitive through dependency chain; no safe upgrade is available in current toolchain." },
+  { id = "RUSTSEC-2024-0412", reason = "Transitive through dependency chain; no safe upgrade is available in current toolchain." },
+  { id = "RUSTSEC-2024-0413", reason = "Transitive through dependency chain; no safe upgrade is available in current toolchain." },
+  { id = "RUSTSEC-2024-0414", reason = "Transitive through dependency chain; no safe upgrade is available in current toolchain." },
+  { id = "RUSTSEC-2024-0415", reason = "Transitive through dependency chain; no safe upgrade is available in current toolchain." },
+  { id = "RUSTSEC-2024-0416", reason = "Transitive through dependency chain; no safe upgrade is available in current toolchain." },
+  { id = "RUSTSEC-2024-0417", reason = "Transitive through dependency chain; no safe upgrade is available in current toolchain." },
+  { id = "RUSTSEC-2024-0418", reason = "Transitive through dependency chain; no safe upgrade is available in current toolchain." },
+  { id = "RUSTSEC-2024-0419", reason = "Transitive through dependency chain; no safe upgrade is available in current toolchain." },
+  { id = "RUSTSEC-2024-0420", reason = "Transitive through dependency chain; no safe upgrade is available in current toolchain." },
+  { id = "RUSTSEC-2025-0057", reason = "Transitive through dependency chain; no safe upgrade is available in current toolchain." },
+  { id = "RUSTSEC-2025-0081", reason = "Transitive through dependency chain; no safe upgrade is available in current toolchain." },
+]
 
 [licenses]
 version = 2

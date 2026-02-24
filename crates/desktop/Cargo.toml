@@ -11,5 +11,3 @@ name = "clavisvault-desktop"
 path = "src/main.rs"
 
 [dependencies]
-anyhow.workspace = true
-tracing.workspace = true

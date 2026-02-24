@@ -2,24 +2,40 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Dark theme (default) ── */
 :root {
   --surface: 12 17 24;
   --panel: 23 29 37;
   --accent: 249 178 90;
   --text: 235 240 248;
+  --bg-base-from: #090c12;
+  --bg-base-mid: #11151d;
+  --bg-base-to: #090c12;
   color-scheme: dark;
 }
 
-:root[data-accent="mint"] {
-  --accent: 112 230 176;
+/* ── Light theme ── */
+:root[data-theme="light"] {
+  --surface: 240 242 245;
+  --panel: 250 251 253;
+  --text: 30 35 50;
+  --bg-base-from: #f0f2f5;
+  --bg-base-mid: #e8eaef;
+  --bg-base-to: #f0f2f5;
+  color-scheme: light;
 }
 
-:root[data-accent="amber"] {
-  --accent: 244 195 89;
+/* ── Accent overrides (work in both themes) ── */
+:root[data-accent="violet"] {
+  --accent: 167 139 250;
 }
 
-:root[data-accent="steel"] {
-  --accent: 141 191 223;
+:root[data-accent="cyan"] {
+  --accent: 34 211 238;
+}
+
+:root[data-accent="rose"] {
+  --accent: 251 113 133;
 }
 
 * {
@@ -32,9 +48,31 @@ body {
   font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
   color: rgb(var(--text));
   background:
-    radial-gradient(circle at 8% 10%, rgba(249, 178, 90, 0.18), transparent 34%),
-    radial-gradient(circle at 92% 88%, rgba(45, 120, 181, 0.22), transparent 38%),
-    linear-gradient(130deg, #090c12 0%, #11151d 46%, #090c12 100%);
+    radial-gradient(circle at 8% 10%, rgb(var(--accent) / 0.18), transparent 34%),
+    radial-gradient(circle at 92% 88%, rgb(var(--accent) / 0.10), transparent 38%),
+    linear-gradient(130deg, var(--bg-base-from) 0%, var(--bg-base-mid) 46%, var(--bg-base-to) 100%);
+}
+
+::selection {
+  background: rgb(var(--accent) / 0.35);
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgb(var(--accent) / 0.25);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--accent) / 0.40);
 }
 
 pre,

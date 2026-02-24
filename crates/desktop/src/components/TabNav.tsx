@@ -24,7 +24,7 @@ export function TabNav({ activeTab, onTabChange, showRemotes }: TabNavProps) {
   return (
     <nav
       className={clsx(
-        "grid grid-cols-2 gap-2 rounded-xl border border-white/10 bg-surface/60 p-2",
+        "grid grid-cols-2 gap-2 rounded-xl border border-accent/15 bg-surface/60 p-2",
         showRemotes ? "md:grid-cols-4" : "md:grid-cols-3",
       )}
     >
@@ -40,7 +40,7 @@ export function TabNav({ activeTab, onTabChange, showRemotes }: TabNavProps) {
               "flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition",
               active
                 ? "bg-accent/90 text-slate-950 shadow-soft"
-                : "text-text/80 hover:bg-white/10 hover:text-text",
+                : "text-text/80 hover:bg-accent/10 hover:text-text",
             )}
           >
             <Icon className="h-4 w-4" />

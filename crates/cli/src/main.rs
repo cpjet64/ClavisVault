@@ -439,11 +439,7 @@ fn parse_auth_only_options(options: &[String], command_name: &str) -> Result<Aut
 fn parse_shell_kind(value: &str) -> Result<ShellKind> {
     let trimmed = value.trim();
     // Normalize both POSIX and Windows-style shell paths regardless of host OS.
-    let basename = trimmed
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(trimmed)
-        .trim();
+    let basename = trimmed.rsplit(['/', '\\']).next().unwrap_or(trimmed).trim();
     let normalized = basename.to_ascii_lowercase();
     let normalized = normalized.strip_suffix(".exe").unwrap_or(&normalized);
 

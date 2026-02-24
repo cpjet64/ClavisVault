@@ -35,11 +35,5 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
-  },
-  "plugins": {
-    "updater": {
-      "endpoints": ["${CLAVISVAULT_UPDATE_URL}"],
-      "pubkey": "${CLAVISVAULT_UPDATE_PUBLIC_KEY}"
-    }
   }
 }

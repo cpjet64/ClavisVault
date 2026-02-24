@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+#[cfg(test)]
+use std::sync::OnceLock;
 use std::{
     collections::HashMap,
     env, fs,
@@ -8,13 +10,9 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
     time::Duration,
 };
-#[cfg(test)]
-use std::sync::OnceLock;
 
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-#[cfg(not(test))]
-use keyring::Entry;
 #[cfg(target_os = "linux")]
 use clavisvault_core::platform::LinuxPlatform;
 #[cfg(target_os = "macos")]
@@ -33,6 +31,8 @@ use clavisvault_core::{
     shell::generate_all_hooks,
     types::{EncryptedVault, KeyEntry, MasterKey, VaultData},
 };
+#[cfg(not(test))]
+use keyring::Entry;
 use quinn::{ClientConfig, Endpoint, SendStream, TransportConfig};
 use rand::RngCore;
 use rustls_platform_verifier::BuilderVerifierExt;
@@ -46,6 +46,7 @@ use tauri::{
 };
 #[cfg(any(target_os = "android", target_os = "ios"))]
 use tauri_plugin_biometric::BiometricExt;
+#[cfg(not(debug_assertions))]
 use tauri_plugin_updater::UpdaterExt;
 use zeroize::Zeroize;
 
@@ -226,7 +227,9 @@ fn store_remote_client_private_key(private_key: &str) {
 }
 
 fn load_remote_client_private_key() -> Option<String> {
-    read_keyring_secret(REMOTE_CLIENT_PRIVATE_KEY_RECORD).ok().flatten()
+    read_keyring_secret(REMOTE_CLIENT_PRIVATE_KEY_RECORD)
+        .ok()
+        .flatten()
 }
 
 fn store_remote_session_token(remote_id: &str, token: &str) {
@@ -301,7 +304,10 @@ fn remote_client_private_key_bytes(settings: &DesktopSettings) -> Result<[u8; 32
         .remote_client_private_key
         .as_deref()
         .and_then(remote_client_private_key_from_hex)
-        .or_else(|| load_remote_client_private_key().and_then(|value| remote_client_private_key_from_hex(&value)))
+        .or_else(|| {
+            load_remote_client_private_key()
+                .and_then(|value| remote_client_private_key_from_hex(&value))
+        })
         .or_else(|| remote_client_private_key_from_hex(&settings.remote_client_fingerprint))
         .ok_or_else(|| anyhow!("invalid remote client identity in settings"))?;
     Ok(private_key)
@@ -317,7 +323,7 @@ impl Default for DesktopSettings {
             relay_endpoint: "relay.clavisvault.app:51820".to_string(),
             clear_clipboard_after_seconds: 30,
             accent: "copper".to_string(),
-            theme: "dark".to_string(),
+            theme: "system".to_string(),
             biometric_enabled: false,
             remote_sync_enabled: false,
             remote_client_fingerprint: String::new(),
@@ -1638,6 +1644,8 @@ fn biometric_available(_app: AppHandle) -> bool {
 #[tauri::command]
 async fn check_updates(app: AppHandle) -> std::result::Result<UpdateStatus, String> {
     let mut status = UpdateStatus::default();
+
+    #[cfg(not(debug_assertions))]
     if let Ok(updater) = app.updater()
         && let Ok(Some(update)) = updater.check().await
     {
@@ -1706,7 +1714,8 @@ pub fn run() {
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
-        tauri::Builder::default()
+        #[allow(unused_mut)]
+        let mut builder = tauri::Builder::default()
             .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
@@ -1714,8 +1723,14 @@ pub fn run() {
                 }
             }))
             .plugin(tauri_plugin_dialog::init())
-            .plugin(tauri_plugin_store::Builder::new().build())
-            .plugin(tauri_plugin_updater::Builder::new().build())
+            .plugin(tauri_plugin_store::Builder::new().build());
+
+        #[cfg(not(debug_assertions))]
+        {
+            builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+        }
+
+        builder
             .setup(|app| {
                 let state = DesktopState::init()?;
                 app.manage(state.clone());

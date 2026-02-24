@@ -1176,8 +1176,8 @@ mod tests {
         let mut state = ServerStateFile::default();
         let mut salt = [0_u8; 16];
         rand::rngs::OsRng.fill_bytes(&mut salt);
-        let key = derive_master_key("pairing-password", &salt)
-            .expect("derive password key should work");
+        let key =
+            derive_master_key("pairing-password", &salt).expect("derive password key should work");
         state.password = Some(PasswordRecord {
             salt,
             digest_hex: hex_of(Sha256::digest(key.as_slice()).as_ref()),
@@ -1217,13 +1217,10 @@ mod tests {
         let mut salt = [0_u8; 16];
         rand::rngs::OsRng.fill_bytes(&mut salt);
         let password = "pairing-password";
-        let key = derive_master_key(password, &salt)
-            .expect("derive password key should work");
+        let key = derive_master_key(password, &salt).expect("derive password key should work");
         let encrypted = lock_vault(paths.vault_file.clone(), &VaultData::new(salt), &key)
             .expect("vault encryption should work");
-        let encrypted_vault = encrypted
-            .to_bytes()
-            .expect("vault bytes should serialize");
+        let encrypted_vault = encrypted.to_bytes().expect("vault bytes should serialize");
         state.password = Some(PasswordRecord {
             salt,
             digest_hex: hex_of(Sha256::digest(key.as_slice()).as_ref()),

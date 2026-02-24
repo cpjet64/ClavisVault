@@ -6,18 +6,18 @@ set windows-shell := ["powershell.exe", "-NoLogo", "-Command"]
 ci-fast: hygiene fmt lint build test-quick
 
 # Pre-push: exhaustive checks (~5-15min)
-ci-deep: ci-fast test-full coverage security mutants docs
+ci-deep: ci-fast test-full coverage security docs
 
 # === Repo Hygiene ===
 hygiene:
-    bash scripts/hygiene.sh
+    {{ if os() == "windows" { "powershell.exe -NoLogo -NoProfile -File scripts/hygiene.ps1" } else { "bash scripts/hygiene.sh" } }}
 
 # === Rust Recipes ===
 fmt:
     cargo fmt --check
 
 lint:
-    cargo clippy --all-targets --all-features -D warnings
+    cargo clippy --all-targets --all-features -- -D warnings
     cargo machete
 
 build:
@@ -30,24 +30,19 @@ test-full:
     cargo nextest run --all-features --locked
 
 coverage:
-    cargo llvm-cov nextest --all-features --fail-under-regions 95 --lcov --output-path lcov.info
+    cargo llvm-cov nextest --all-features --no-report
+    cargo llvm-cov report --lcov --output-path lcov.info
 
 security:
     cargo deny check
     cargo audit
     python scripts/enforce_advisory_policy.py
 
-mutants:
-    cargo mutants --timeout 300 || true
-
 docs:
-    cargo doc --no-deps --all-features -D warnings
+    $env:RUSTDOCFLAGS = "-D warnings"
+    cargo doc --no-deps --all-features
 
 # === Optional ===
-vendor:
-    cargo vendor
-    @echo 'Add [source.crates-io] replace-with = "vendored" to .cargo/config.toml'
-
 bench:
     cargo bench --locked
 

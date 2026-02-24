@@ -52,11 +52,11 @@ export function CommandPalette({
   return (
     <div className="fixed inset-0 z-40 flex items-start justify-center bg-black/55 p-4 pt-24" onClick={onClose}>
       <div
-        className="w-full max-w-xl rounded-2xl border border-white/20 bg-panel/95 p-4 shadow-glass backdrop-blur-glass"
+        className="w-full max-w-xl rounded-2xl border border-accent/25 bg-panel/95 p-4 shadow-glass backdrop-blur-glass"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="mb-3 flex items-center gap-2 rounded-lg border border-white/10 bg-surface/70 px-3 py-2">
-          <Search className="h-4 w-4 text-text/70" />
+        <div className="mb-3 flex items-center gap-2 rounded-lg border border-accent/20 bg-surface/70 px-3 py-2">
+          <Search className="h-4 w-4 text-accent/70" />
           <input
             autoFocus
             value={query}
@@ -74,13 +74,13 @@ export function CommandPalette({
                 command.run();
                 onClose();
               }}
-              className="w-full rounded-lg border border-white/10 bg-surface/60 px-3 py-2 text-left text-sm text-text/85 transition hover:border-accent/80 hover:bg-surface"
+              className="w-full rounded-lg border border-accent/10 bg-surface/60 px-3 py-2 text-left text-sm text-text/85 transition hover:border-accent/50 hover:bg-accent/10"
             >
               {command.label}
             </button>
           ))}
           {filtered.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-white/15 p-3 text-sm text-text/60">
+            <div className="rounded-lg border border-dashed border-accent/15 p-3 text-sm text-text/60">
               No command matches this search.
             </div>
           ) : null}

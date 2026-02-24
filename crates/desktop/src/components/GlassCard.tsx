@@ -9,7 +9,7 @@ export function GlassCard({ children, className }: GlassCardProps) {
   return (
     <section
       className={clsx(
-        "rounded-2xl border border-white/15 bg-panel/65 p-5 shadow-glass backdrop-blur-glass",
+        "rounded-2xl border border-accent/15 bg-panel/65 p-5 shadow-glass backdrop-blur-glass",
         className,
       )}
     >

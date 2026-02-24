@@ -37,7 +37,6 @@ tauri-plugin-single-instance.workspace = true
 tauri-plugin-store.workspace = true
 tauri-plugin-updater.workspace = true
 tokio.workspace = true
-tracing.workspace = true
 
 [features]
 default = ["custom-protocol"]

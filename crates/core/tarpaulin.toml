@@ -1,6 +1,0 @@
-[test_config]
-run-types = ["Lib"]
-workspace = false
-packages = ["clavisvault-core"]
-include-files = ["crates/core/src/*.rs"]
-exclude-files = ["target/**", "fuzz/**"]
