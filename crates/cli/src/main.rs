@@ -1287,6 +1287,25 @@ mod tests {
     }
 
     #[test]
+    fn parse_env_load_accepts_ttl_at_maximum() {
+        let command = parse_env_load_command(&[
+            "--shell".to_string(),
+            "bash".to_string(),
+            "--ttl-minutes".to_string(),
+            MAX_SESSION_TTL_MINUTES.to_string(),
+        ])
+        .expect("max ttl should parse");
+
+        match command {
+            Command::EnvLoad { options, .. } => {
+                assert!(matches!(options.shell, ShellKind::Bash));
+                assert_eq!(options.ttl_minutes, MAX_SESSION_TTL_MINUTES);
+            }
+            _ => unreachable!("expected env-load command"),
+        }
+    }
+
+    #[test]
     fn parse_shell_kind_accepts_shell_paths_and_executable_names() {
         assert!(matches!(
             parse_shell_kind("bash").expect("bash should parse"),

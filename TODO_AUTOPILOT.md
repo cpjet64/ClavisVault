@@ -37,6 +37,7 @@
 - Added parser regression test `parse_env_load_rejects_ttl_above_maximum`.
 - Synced `docs/SPEC.md` and `masterplan.md` with policy age-anchor hardening and CLI TTL bound behavior.
 - Added dedicated wildcard matcher regression tests for policy rule pattern semantics.
+- Added CLI boundary regression test for accepting the exact `env-load` TTL maximum (`1440` minutes).
 
 ## Decisions Needed
 - None.
