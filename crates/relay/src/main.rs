@@ -646,12 +646,14 @@ mod tests {
             &datagram,
             now,
         );
-        match decision {
-            DatagramDecision::Drop(DatagramDropReason::DestinationCapExceeded(count)) => {
-                assert_eq!(count, 69);
-                assert!(count > MAX_RELAY_DESTINATIONS);
-            }
-            _ => panic!("expected destination cap drop"),
+        assert!(matches!(
+            decision,
+            DatagramDecision::Drop(DatagramDropReason::DestinationCapExceeded(_))
+        ));
+        if let DatagramDecision::Drop(DatagramDropReason::DestinationCapExceeded(count)) = decision
+        {
+            assert_eq!(count, 69);
+            assert!(count > MAX_RELAY_DESTINATIONS);
         }
     }
 

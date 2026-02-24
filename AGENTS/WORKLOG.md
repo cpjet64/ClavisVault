@@ -1,16 +1,22 @@
 # Worklog
 
 ## Now
-- Continue relay trust-boundary hardening and malformed-traffic handling edge cases under load.
+- Classified repository state as FINISHED/mostly complete after a clean standard-gate pass.
+- No remaining high-confidence blocked implementation stubs or test failures are visible in source.
 
 ## Next
-- Resolve relay hardening decision points (destination cap behavior and legacy compatibility boundaries) and continue malformed-traffic load checks.
-- Run a repository-wide pass for remaining high-confidence security TODOs and update evidence.
+- Resolve relay hardening decision points (destination cap behavior and legacy compatibility boundaries) once product direction is set.
+- Continue malformed-traffic load checks, then fold results into evidence once reproducible baselines are available.
 
 ## Later
 - Optional: triage low-risk follow-up hardening based on future findings.
 
 ## Done
+- Completed repo-wide status refresh in-line with AGENTS/SPEC instructions:
+  - `just ci-fast` (hygiene + fmt + clippy + machete + build + nextest) passes cleanly.
+  - `213 tests run: 213 passed, 0 skipped` in the latest quick suite.
+  - In-source marker scan found no remaining high-confidence stubs (`todo!`, `unimplemented!`, `pass`, etc.) except test-only panic guards.
+  - Replaced a remaining test-only `panic!` in relay fanout-cap coverage with explicit `matches!` assertion plus count checks.
 - Implemented remote scope propagation from desktop settings into pairing and push payloads, plus server-side scope enforcement and TTL policy mapping.
 - Added request validation and normalization for remote permissions/scopes; fixed compile regressions and stabilized the slice with unit coverage.
 - Added desktop startup normalization so invalid legacy permission values now fail closed with explicit mapping errors.
@@ -62,7 +68,10 @@
 ## Evidence
 - Reviewed `crates/core/src/export.rs`, `crates/core/src/types.rs`, `crates/core/src/policy.rs`, `crates/core/src/shell.rs`, `crates/core/src/audit_log.rs`.
 - Reviewed `crates/cli/src/main.rs`, `crates/desktop/src-tauri/src/lib.rs`, `crates/server/src/main.rs`, `crates/relay/src/main.rs`.
-- Verified format/lint/test gates after this change set (`cargo fmt --all`, package clippy/tests for core/cli/server/desktop-tauri/relay).
+- Verified format/lint/test gates after this change set (`just ci-fast`, package clippy/tests for core/cli/server/desktop-tauri/relay plus updated scope work).
+- Verified targeted relay regression path after assertion cleanup with:
+  - `cargo fmt --check`
+  - `cargo test -p clavisvault-relay destination_fanout_cap_causes_drop`
 
 ## Assumptions
 - No behavior changes should silently reduce CLI compatibility.
