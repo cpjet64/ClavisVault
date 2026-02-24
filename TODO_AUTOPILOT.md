@@ -1,7 +1,9 @@
 # Autopilot Worklog
 
 ## Now
-- Finalize docs-to-implementation alignment pass and commit current mismatch fixes.
+- Repository is now classified as FINISHED / MOSTLY COMPLETE.
+- Fix applied: server pairing scope enforcement is now conditionally enforced when command is explicitly requested.
+- No blocking correctness gaps found after full standard-gate pass; awaiting next high-value maintenance item.
 
 ## Next
 - Continue finished-mode scan for correctness/security edge cases.
@@ -38,6 +40,11 @@
 - Synced `docs/SPEC.md` and `masterplan.md` with policy age-anchor hardening and CLI TTL bound behavior.
 - Added dedicated wildcard matcher regression tests for policy rule pattern semantics.
 - Added CLI boundary regression test for accepting the exact `env-load` TTL maximum (`1440` minutes).
+- Ran `rg` for TODO/FIXME/stub markers and found only documentation placeholders + one server-side `panic!` in relay packet parsing testability path.
+- `just ci-fast` failed before fix with `clavisvault-server` compile errors:
+  - unresolved `requested_scopes` symbol in `verify_or_pair`
+  - scope comparison type inference failure at `scopes.iter().any(...)`
+- Updated `crates/server/src/main.rs` to read requested scopes from `policy.scopes` and compare via scope reference.
 
 ## Decisions Needed
 - None.
@@ -48,6 +55,14 @@
 - Current findings are non-blocking:
   - docs CVE placeholders
   - one test-only `panic!` in CLI tests.
+- Latest verification run:
+  - `just ci-fast` clean (fmt/lint/build/test: 213 passed, 0 failed)
+
+## Done
+- Updated `crates/server/src/main.rs` to avoid unguarded requested-scope checks during pairing without explicit command.
+- Added `enforce_requested_scopes_match` to `PairingPolicy` to express when pairing scope validation applies.
+- Fixed clippy `op_ref` issue and normalized scope comparison.
+- Re-ran `just ci-fast` to green after the above fix.
 
 ## Assumptions
 - Repository is in FINISHED / MOSTLY COMPLETE mode because:

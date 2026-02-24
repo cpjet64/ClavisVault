@@ -684,6 +684,7 @@ struct PairingPolicy<'a> {
     remote_id: Option<&'a str>,
     scopes: Option<Vec<String>>,
     session_ttl_seconds: Option<u64>,
+    enforce_requested_scopes_match: bool,
 }
 
 fn verify_or_pair(
@@ -696,6 +697,16 @@ fn verify_or_pair(
     if let Some(token) = token {
         verify_token_with_scope(state, token, policy.required_scope, policy.remote_id)?;
         return Ok(None);
+    }
+
+    if policy.enforce_requested_scopes_match
+        && let Some(scopes) = policy.scopes.as_ref()
+        && !scopes.iter().any(|scope| scope == policy.required_scope)
+    {
+        bail!(
+            "requested scopes do not include command scope: {}",
+            policy.required_scope
+        );
     }
 
     let Some(pairing_code) = pairing_code else {
@@ -846,6 +857,7 @@ fn handle_vault_push(
             remote_id: Some(client_fingerprint.as_str()),
             scopes: requested_scopes,
             session_ttl_seconds: request.session_ttl_seconds,
+            enforce_requested_scopes_match: request.command.is_some(),
         },
     )?;
     let allow_initial_bind = !has_session_token && request.pairing_code.is_some();
@@ -1327,6 +1339,7 @@ mod tests {
                 remote_id: None,
                 scopes: None,
                 session_ttl_seconds: None,
+                enforce_requested_scopes_match: false,
             },
         );
         assert!(first.is_ok());
@@ -1342,6 +1355,7 @@ mod tests {
                 remote_id: None,
                 scopes: None,
                 session_ttl_seconds: None,
+                enforce_requested_scopes_match: false,
             },
         );
         assert!(second.is_err());
@@ -1371,6 +1385,7 @@ mod tests {
                 remote_id: None,
                 scopes: None,
                 session_ttl_seconds: None,
+                enforce_requested_scopes_match: false,
             },
         );
         assert!(result.is_err());
@@ -1401,6 +1416,7 @@ mod tests {
                 remote_id: None,
                 scopes: None,
                 session_ttl_seconds: None,
+                enforce_requested_scopes_match: false,
             },
         );
         assert!(matches!(result, Ok(Some(_))));
@@ -1588,6 +1604,57 @@ mod tests {
 
         assert!(handle_vault_push(&paths, &mut state, pair_request).is_err());
         assert!(state.token.is_none());
+    }
+
+    #[test]
+    fn requested_scopes_must_include_command_scope_on_pairing() {
+        let root = temp_dir("requested-scope-for-command");
+        let paths = sample_paths(&root);
+        let mut state = ServerStateFile::default();
+        let mut salt = [0_u8; 16];
+        rand::rngs::OsRng.fill_bytes(&mut salt);
+        let key = derive_master_key("pw-scope-command", &salt).expect("derive should work");
+        let encrypted = lock_vault(paths.vault_file.clone(), &VaultData::new(salt), &key)
+            .expect("encrypt should work");
+        let encrypted_vault = encrypted.to_bytes().expect("serialize should work");
+        state.password = Some(PasswordRecord {
+            salt,
+            digest_hex: hex_of(Sha256::digest(key.as_slice()).as_ref()),
+        });
+        let challenge = ensure_pairing_challenge(&mut state);
+
+        let mismatched_request = PushRequest {
+            token: None,
+            pairing_code: Some(format!("{}-{}", challenge.code, challenge.checksum)),
+            password: Some("pw-scope-command".to_string()),
+            client_fingerprint: Some("scope-command-client".to_string()),
+            server_fingerprint: None,
+            command: Some(REMOTE_COMMAND_ERASE.to_string()),
+            reason: Some("bad scopes".to_string()),
+            requested_scopes: Some(vec!["push".to_string()]),
+            session_ttl_seconds: None,
+            encrypted_vault_hex: hex_of(&encrypted_vault),
+        };
+
+        assert!(handle_vault_push(&paths, &mut state, mismatched_request).is_err());
+        assert!(state.token.is_none());
+
+        let aligned_request = PushRequest {
+            token: None,
+            pairing_code: Some(format!("{}-{}", challenge.code, challenge.checksum)),
+            password: Some("pw-scope-command".to_string()),
+            client_fingerprint: Some("scope-command-client".to_string()),
+            server_fingerprint: None,
+            command: Some(REMOTE_COMMAND_ERASE.to_string()),
+            reason: Some("good scopes".to_string()),
+            requested_scopes: Some(vec![REMOTE_COMMAND_ERASE.to_string()]),
+            session_ttl_seconds: None,
+            encrypted_vault_hex: hex_of(&encrypted_vault),
+        };
+
+        let response = handle_vault_push(&paths, &mut state, aligned_request)
+            .expect("pairing should work when scopes include command");
+        assert!(response.issued_token.is_some());
     }
 
     #[test]
