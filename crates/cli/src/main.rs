@@ -964,6 +964,12 @@ fn resolve_password(auth: &AuthOptions) -> Result<String> {
     }
 
     if let Ok(token) = env::var(SESSION_TOKEN_ENV_VAR) {
+        if !auth.allow_legacy_session_token {
+            bail!(
+                "environment variable {SESSION_TOKEN_ENV_VAR} is deprecated; pass --allow-legacy-session-token to continue"
+            );
+        }
+        eprintln!("warning: using deprecated {SESSION_TOKEN_ENV_VAR}; compatibility mode only");
         match parse_session_token(&token, Utc::now()) {
             Ok(password) => return Ok(password),
             Err(err) => {
@@ -1404,7 +1410,7 @@ fn print_help() {
         session_token_file = SESSION_TOKEN_FILE_ENV_VAR
     );
     println!(
-        "  legacy session-token env var ({session_env}) is still accepted as compatibility only",
+        "  legacy session-token env var ({session_env}) is still accepted as compatibility only with --allow-legacy-session-token",
         session_env = SESSION_TOKEN_ENV_VAR
     );
     println!(

@@ -1,11 +1,11 @@
 # Worklog
 
 ## Now
-- Complete relay hardening follow-up by removing plaintext session-env helper surface for env-load flows.
+- Continue relay trust-boundary hardening and load behavior validation under flood and malformed traffic conditions.
 - Keep validating relay trust-boundary and TTL/scoping behavior under load.
 
 ## Next
-- Continue deep-dive security sweep: relay trust-boundary hardening and scope/TTL mismatch checks under load.
+- Continue deep-dive security sweep: finalize relay trust-boundary documentation and explicit trust-boundary signaling in docs.
 - Run a repository-wide pass for remaining high-confidence security TODOs and update evidence.
 
 ## Later
@@ -19,6 +19,7 @@
 - Removed deprecated plaintext session shell snippet API surface from core shell helpers and CLI tests.
   - `shell_session_exports` / `shell_session_export_snippets` are no longer exposed from `crates/core/src/shell.rs`.
   - `clavisvault-cli` now only documents/uses token-file based env-load snippets; tests were tightened accordingly.
+- Added explicit compatibility gating for legacy `CLAVISVAULT_SESSION_TOKEN` env-var session-token fallback.
 
 ## Done
 - Removed silent fallback for missing session signing key in CLI keyring:
