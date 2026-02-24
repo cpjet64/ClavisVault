@@ -74,7 +74,7 @@ npm --prefix "${ROOT_DIR}/crates/desktop" ci
 npm --prefix "${ROOT_DIR}/crates/desktop" run build
 
 echo "[2/4] build workspace release binaries"
-cargo build --workspace --release
+cargo build --workspace --release --locked
 cp "${ROOT_DIR}/target/release/clavisvault-server" "${SERVER_DIR}/"
 cp "${ROOT_DIR}/target/release/clavisvault-relay" "${RELAY_DIR}/"
 

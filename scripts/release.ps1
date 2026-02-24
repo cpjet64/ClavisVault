@@ -90,7 +90,7 @@ npm --prefix (Join-Path $rootDir 'crates/desktop') ci
 npm --prefix (Join-Path $rootDir 'crates/desktop') run build
 
 Write-Output '[2/4] build workspace release binaries'
-cargo build --workspace --release
+cargo build --workspace --release --locked
 Copy-Item (Join-Path $rootDir ("target/release/clavisvault-server$binarySuffix")) (Join-Path $serverDir ("clavisvault-server$binarySuffix"))
 Copy-Item (Join-Path $rootDir ("target/release/clavisvault-relay$binarySuffix")) (Join-Path $relayDir ("clavisvault-relay$binarySuffix"))
 
