@@ -36,6 +36,7 @@ use serde::{Deserialize, Serialize};
 const APP_DIR_NAME: &str = "clavisvault";
 const VAULT_FILE_NAME: &str = "vault.cv";
 const DEFAULT_SESSION_TTL_MINUTES: i64 = 30;
+const MAX_SESSION_TTL_MINUTES: i64 = 24 * 60;
 const SESSION_TOKEN_PREFIX: &str = "clv2";
 const SESSION_TOKEN_VERSION: u8 = 2;
 const SESSION_TOKEN_NAMESPACE: &str = "com.clavisvault.cli";
@@ -282,6 +283,9 @@ fn parse_env_load_command(options: &[String]) -> Result<Command> {
 
     if ttl_minutes <= 0 {
         bail!("ttl minutes must be positive");
+    }
+    if ttl_minutes > MAX_SESSION_TTL_MINUTES {
+        bail!("ttl minutes must be <= {MAX_SESSION_TTL_MINUTES}");
     }
 
     Ok(Command::EnvLoad {
@@ -1267,6 +1271,19 @@ mod tests {
             .expect_err("invalid prefix should fail");
 
         assert!(error.to_string().contains("invalid --prefix value"));
+    }
+
+    #[test]
+    fn parse_env_load_rejects_ttl_above_maximum() {
+        let error = parse_env_load_command(&[
+            "--ttl-minutes".to_string(),
+            (MAX_SESSION_TTL_MINUTES + 1).to_string(),
+        ])
+        .expect_err("oversized ttl must fail");
+        assert!(
+            error.to_string().contains("ttl minutes must be <="),
+            "{error}"
+        );
     }
 
     #[test]
