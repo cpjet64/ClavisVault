@@ -36,7 +36,7 @@ clavisvault/
 ├── docs/
 │   ├── SPEC.md                 # this file
 │   ├── alerts.md               # YAML frontmatter alerts
-│   └── CHANGELOG.md            # repo root
+├── CHANGELOG.md                # repository changelog (root)
 ├── relay-public/               # Docker + systemd for hosted relay
 └── scripts/
     ├── build-all.sh
@@ -253,7 +253,7 @@ Every packet:
 ## 8. Distribution & Release
 - GitHub Releases with .dmg, .exe, .AppImage, server & relay binaries
 - Docker images for relay & server
-- alerts.md and CHANGELOG.md always in repo root
+- `docs/alerts.md` and root `CHANGELOG.md` are always present and kept current
 
 Security Invariants (audited in every CI run)
 1. No plaintext ever written to disk.

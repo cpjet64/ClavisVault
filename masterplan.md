@@ -43,6 +43,7 @@ Scope: Consolidated check of repository documentation against implementation sta
 | `docs/SPEC.md` | Repository URL points at placeholder owner (`YOURUSERNAME`) | ✅ | `docs/SPEC.md:GitHub` and `Cargo.toml:repository` now set to `cpjet64/ClavisVault` |
 | `docs/SPEC.md` | Workspace layout lists `members = ["crates/*", "crates/desktop/src-tauri"]` | ✅ | `docs/SPEC.md:47` and `Cargo.toml` |
 | `docs/SPEC.md` | Server section claimed “No edit/delete API” while implementation supports authenticated remote `erase` command | ✅ | `docs/SPEC.md` updated; implementation evidence in `crates/server/src/main.rs` (`REMOTE_COMMAND_ERASE`, `handle_vault_push`) |
+| `docs/SPEC.md` | Path/location wording for `alerts.md` and `CHANGELOG.md` had conflicting root-vs-docs wording | ✅ | `docs/SPEC.md` now consistently states `docs/alerts.md` + root `CHANGELOG.md` |
 | `AGENTS.md` / `CLAUDE.md` | Stale “Current status” language | ✅ | `AGENTS.md` status text was refreshed; `CLAUDE.md` has no stale status line |
 | `RUN-THIS-PROMPT.md` | Node checks expect pnpm-only lockfile and always-on frontend lint/format configs | ✅ | Document now accepts `package-lock.json` for npm and makes lint/format config checks conditional |
 | `RUN-THIS-PROMPT.md` | Python checks require project-wide pyproject/uv policy by default | ✅ | Document now documents dependency-manager scope so utility-script repos can skip as applicable |

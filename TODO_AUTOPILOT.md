@@ -22,6 +22,7 @@
 - Added regression test: `dedupe_active_alerts_handles_large_dedupe_hours_without_overflow`.
 - Updated `docs/SPEC.md` server behavior wording to match implemented authenticated remote `erase` command.
 - Synced `masterplan.md` matrix with that SPEC alignment fix and code evidence.
+- Corrected `docs/SPEC.md` location wording to consistently document `docs/alerts.md` and root `CHANGELOG.md`.
 
 ## Decisions Needed
 - None.
