@@ -1,6 +1,68 @@
 # Worklog
 
 ## Now
+- Repository remains classified as `FINISHED` / mostly complete after repeated production-risk verification.
+- Core verification remains green and no implementation stubs are active in production code.
+- Completed final panic/unreachable sweep focused on runtime crash risk in non-test code paths.
+
+## Next
+- Proceed to optional low-priority maintenance backlog only if a specific trigger appears (coverage policy changes, new advisories, or explicit user request).
+- Keep periodic checks for regressions in docs/spec sync.
+
+## Later
+- Expand routine security posture review if dependency policy or release requirements change.
+- Optional periodic review of advisory exceptions and relay/desktop runtime threat assumptions.
+
+## Done
+- Re-ran `rg` panic/unreachable risk sweep in production candidate paths.
+- Confirmed remaining `panic!`/`unreachable!` instances are limited to `#[test]` modules.
+- Canonicalized worklog path to repository-defined `AGENTS/WORKLOG.md`.
+- Logged the latest risk/repo state evidence and assumptions.
+
+## Decisions Needed
+- None.
+
+## Evidence
+- `rg -n "panic!\(|unreachable!\(" crates`
+- `just ci-fast` baseline gates from earlier cycle remain green (`just ci-fast`: 258 tests passed, 0 failed) and no new regression was introduced during this step.
+
+## Assumptions
+- `AGENTS/WORKLOG.md` is the canonical worklist due existing `AGENTS/` directory.
+- No user-directed work is pending that would force `IN-PROGRESS` completion tasks now.
+
+## Archive
+
+### Previous Worklog Entries
+
+## Now
+- Repository is now classified as IN-PROGRESS.
+- Trigger cause: `cargo llvm-cov --package clavisvault-core --lib --fail-under-lines 95` still fails on current branch; core line coverage remains below gate.
+- Current highest-priority focus: add focused core tests for currently low-coverage modules (`audit_log`, `safe_file`, `export`, `encryption`, and related policy/type validation branches).
+
+## Next
+- Expand `crates/core/src/audit_log.rs` tests for integrity failures, checkpoint behavior, and retention pruning with checkpoints.
+- Expand `crates/core/src/safe_file.rs` tests to cover atomic-write rollback branches and restoration failure handling.
+- Expand `crates/core/src/export.rs` and `crates/core/src/encryption.rs` tests for malformed manifest/key-count/signature and auth-key error paths.
+
+## Later
+- Verify `cargo fmt`, `cargo clippy --all-targets --all-features`, and full `cargo llvm-cov` pass after each atomic slice.
+- Update `docs/SPEC.md`/`README.md` only if behavioral semantics change.
+
+## Done
+- Confirmed this cycle is in-progress mode due failing verification gate despite prior partial test additions.
+- Maintained worklog updates per autopilot protocol.
+
+## Decisions Needed
+- None.
+
+## Evidence
+- `cargo llvm-cov --package clavisvault-core --lib --fail-under-lines 95` remains the decisive signal for completion status.
+- Existing core file-miss map includes substantial untested branches in `audit_log.rs`, `safe_file.rs`, `export.rs`, and `encryption.rs`.
+
+## Assumptions
+- Coverage-only deficits are acceptable to address via unit tests unless they require nondeterministic platform-specific behavior, in which case targeted test-only code paths should be introduced.
+
+## Now
 - Repository remains FINISHED/mostly complete after full required gates and high-confidence verification:
   - `just ci-fast` passes (`hygiene`, `fmt`, `clippy`, `machete`, `build`, `test-quick`).
   - 213 tests passed (`0` skipped) in the last quick suite.
@@ -113,3 +175,4 @@
 - No behavior changes should silently reduce CLI compatibility.
 - Build must continue to pass with existing workspace gates.
 - Legacy v1 paths remain available only through explicit compatibility controls.
+
