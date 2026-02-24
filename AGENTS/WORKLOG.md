@@ -48,6 +48,9 @@
 - Added relay trust-boundary signaling and docs updates:
   - `clavisvault-relay` help/startup now explicitly states unauthenticated forwarding boundary assumptions.
   - `docs/SPEC.md` and `README.md` now document relay trust boundary expectations for operators.
+- Completed a focused repository security sweep for inline TODO/TODO-like markers:
+  - Scanned core/cli/server/desktop-tauri/relay/doc set for high-confidence placeholders (`TODO`, `FIXME`, `XXX`, `HACK`, `NotImplemented`, `unimplemented!`, and obvious fallback stubs).
+  - No new high-confidence placeholders were identified beyond already-tracked migration decisions.
 
 ## Decisions Needed
 - Export signer persistence location and migration model: server-side keyring + explicit migration mode or dedicated CLI-managed trust file.
