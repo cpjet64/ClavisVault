@@ -100,6 +100,7 @@ Scope: Consolidated check of repository documentation against implementation sta
 - CLI expanded with `rotate-key`, `policy check`, `audit verify`, and `recovery-drill`.
 - Alert schema expanded in `docs/alerts.md` with structured metadata fields (`id`, `severity`, `channel`, `dedupe_hours`, schedules, ack hints).
 - Alert runtime now applies `dedupe_hours` suppression windows and alert-level ack-default hints during update checks (`crates/desktop/src-tauri/src/lib.rs`, covered by unit tests).
+- Recovery drill export verification now fails explicitly when export data is provided without a non-empty export passphrase (`crates/core/src/recovery.rs`, covered by unit tests).
 
 ## Nice-to-have feature completion matrix (8/8)
 

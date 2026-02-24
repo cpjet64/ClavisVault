@@ -28,6 +28,7 @@
 - Added regression test `version_leq_rejects_non_numeric_segments`.
 - Hardened recovery drill export validation: export verification now fails explicitly when export passphrase is missing/empty.
 - Added `core` regression tests for recovery drill export verification with and without passphrase.
+- Synced `docs/SPEC.md` and `masterplan.md` to record the recovery-drill passphrase requirement and verification behavior.
 
 ## Decisions Needed
 - None.

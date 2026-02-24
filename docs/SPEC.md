@@ -280,6 +280,7 @@ Security Invariants (audited in every CI run)
   - `audit verify`
   - `recovery-drill`
   - `rotate-key`
+- Recovery drill export verification requires a non-empty export passphrase when `export_path` is provided; missing passphrases are reported as explicit verification failures.
 - Remote trust policy metadata is tracked per remote:
   - `permissions`, `session_ttl_seconds`, `revoked_at`, `requires_repairing`
 - Server token payload now carries `jti`, `scp`, and `rid`; server validates scope and supports explicit session revoke command.
