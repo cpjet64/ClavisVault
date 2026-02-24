@@ -281,6 +281,8 @@ Security Invariants (audited in every CI run)
   - `recovery-drill`
   - `rotate-key`
 - Recovery drill export verification requires a non-empty export passphrase when `export_path` is provided; missing passphrases are reported as explicit verification failures.
+- CLI `env-load` session token TTL is bounded (`1..=1440` minutes) to prevent extreme timestamp math and preserve deterministic token lifetime semantics.
+- Policy validation treats `max_age_days` as secret-lifecycle age (rotation/creation anchor), not mutable metadata edit time.
 - Remote trust policy metadata is tracked per remote:
   - `permissions`, `session_ttl_seconds`, `revoked_at`, `requires_repairing`
 - Server token payload now carries `jti`, `scp`, and `rid`; server validates scope and supports explicit session revoke command.

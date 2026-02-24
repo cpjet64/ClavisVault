@@ -35,6 +35,7 @@
 - Hardened policy `max_age_days` anchor to use rotation/creation age (not mutable metadata-only `last_updated`), with regression tests.
 - Added CLI bound check for `env-load --ttl-minutes` to cap session token TTL at 24h and prevent extreme timestamp math.
 - Added parser regression test `parse_env_load_rejects_ttl_above_maximum`.
+- Synced `docs/SPEC.md` and `masterplan.md` with policy age-anchor hardening and CLI TTL bound behavior.
 
 ## Decisions Needed
 - None.

@@ -101,6 +101,8 @@ Scope: Consolidated check of repository documentation against implementation sta
 - Alert schema expanded in `docs/alerts.md` with structured metadata fields (`id`, `severity`, `channel`, `dedupe_hours`, schedules, ack hints).
 - Alert runtime now applies `dedupe_hours` suppression windows and alert-level ack-default hints during update checks (`crates/desktop/src-tauri/src/lib.rs`, covered by unit tests).
 - Recovery drill export verification now fails explicitly when export data is provided without a non-empty export passphrase (`crates/core/src/recovery.rs`, covered by unit tests).
+- Policy validation now anchors `max_age_days` to secret lifecycle timestamps (rotation/creation) and rejects whitespace-only tags when tags are required (`crates/core/src/policy.rs`, covered by unit tests).
+- CLI session-token TTL for `env-load` is now capped at 24 hours to avoid extreme token-expiry arithmetic (`crates/cli/src/main.rs`, covered by parser unit test).
 
 ## Nice-to-have feature completion matrix (8/8)
 
