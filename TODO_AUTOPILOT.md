@@ -31,6 +31,8 @@
 - Synced `docs/SPEC.md` and `masterplan.md` to record the recovery-drill passphrase requirement and verification behavior.
 - Added CLI parse guard: `recovery-drill --export-path` now requires `--export-passphrase`.
 - Added CLI parser tests for recovery command passphrase requirement and valid parse path.
+- Hardened policy validation: `require_tags` now rejects whitespace-only tags.
+- Hardened policy `max_age_days` anchor to use rotation/creation age (not mutable metadata-only `last_updated`), with regression tests.
 
 ## Decisions Needed
 - None.
