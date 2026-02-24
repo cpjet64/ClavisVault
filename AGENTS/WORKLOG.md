@@ -1,18 +1,21 @@
 # Worklog
 
 ## Now
-- Finalize and harden CLI/session-token file transport behavior, then commit as an atomic security slice.
+- Implement explicit failure behavior when CLI session token signing keyring continuity is unavailable.
 
 ## Next
-- Continue deep-dive security sweep: session token fallback handling in CLI help/docs and remaining server/desktop trust enforcement consistency.
-- Run a repository-wide pass for remaining high-confidence security TODOs and update worklist evidence.
-- Prepare next implementation commit if any critical behavior gap remains (server scope enforcement and recovery drill continuity).
+- Continue deep-dive security sweep: server scope enforcement canonical checks and recovery drill continuity.
+- Run a repository-wide pass for remaining high-confidence security TODOs and update evidence.
+- Add CI-safe negative tests for keyring-missing startup paths if feasible.
 
 ## Later
 - Finalize relay trust-boundary documentation updates and any remaining migration notes in `docs/SPEC.md` and `README.md`.
 - Optional: triage low-risk follow-up hardening based on future findings.
 
 ## Done
+- Removed silent fallback for missing session signing key in CLI keyring:
+  - `load_or_generate_session_token_secret` now fails fast when keyring is unavailable and reports recovery guidance instead of generating a divergent local secret.
+  - Preserves compatibility in test mode via in-memory key cache while hardening release behavior.
 - Completed CLI/desktop shell hardening follow-up slice:
   - `clavisvault_core::shell` now exposes `CLAVISVAULT_SESSION_TOKEN_FILE`-based snippets and clear-path cleanup.
   - `clavisvault-cli` now accepts `--session-token-file` (`--token-file`) and prefers it over env/plaintext token.

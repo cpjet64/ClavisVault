@@ -1273,13 +1273,9 @@ fn load_or_generate_session_token_secret() -> Result<[u8; 32]> {
                 Ok(key)
             }
             Err(err) if is_keyring_missing_error(&err.to_string()) => {
-                let mut key = [0_u8; 32];
-                rand::rngs::OsRng.fill_bytes(&mut key);
-                let encoded = URL_SAFE_NO_PAD.encode(key);
-                entry
-                    .set_password(&encoded)
-                    .map_err(|err| anyhow!("session signing key write failed ({err})"))?;
-                Ok(key)
+                bail!(
+                    "session signing key unavailable in keyring ({err}); restore keyring access and initialize a new key by running env-load once with keyring enabled"
+                )
             }
             Err(err) => bail!("session signing key read failed ({err})"),
         }
