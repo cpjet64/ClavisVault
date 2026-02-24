@@ -1,70 +1,85 @@
 # Coverage 100% TODO
 
-## Scope
-- Goal: raise **core crate test coverage to 100%** for `cargo llvm-cov --package clavisvault-core --lib --summary-only` and then keep it stable.
-- Date recorded: 2026-02-24
-- Current measured baseline (from latest run):
-  - Lines covered: 87.56% (4510 covered / 561 missed)
-  - Functions covered: 79.16% (451 covered / 94 missed)
-  - Top-lagging modules:
-    - `crates/core/src/safe_file.rs` (`Lines 69.23%`, `Functions 56.86%`)
-    - `crates/core/src/shell.rs` (`Lines 67.20%`, `Functions 66.67%`)
-    - `crates/core/src/audit_log.rs` (`Lines 86.23%`, `Functions 80.00%`)
-    - `crates/core/src/encryption.rs` (`Lines 87.58%`, `Functions 86.67%`)
+## Goal
+- Achieve and sustain **100% lines + functions** coverage for:
+  - `cargo llvm-cov --package clavisvault-core --lib`
+- Keep this plan as the single source of truth for coverage work until gates are green and stable.
+- Rebaseline after every meaningful test addition before and after each commit.
 
-## Why this is not already 100%
-- In `safe_file.rs` and `shell.rs`, many lines are currently not exercised because these files still contain large trailing blank/testless blocks after the last test and non-deterministic OS-permission handling paths.
-- Some branches are platform-restricted (Windows-only vs Unix-only) and are necessarily absent from a single platform run.
+## Evidence (as of 2026-02-24)
+- Core coverage summary currently at:
+  - Lines: 87.56% (4510 covered / 561 missed)
+  - Functions: 79.16% (451 covered / 94 missed)
+- Current top debt modules:
+  - `crates/core/src/safe_file.rs` (Lines 69.23%, Functions 56.86%)
+  - `crates/core/src/shell.rs` (Lines 67.20%, Functions 66.67%)
+  - `crates/core/src/audit_log.rs` (Lines 86.23%, Functions 80.00%)
+  - `crates/core/src/encryption.rs` (Lines 87.58%, Functions 86.67%)
+- Source of truth for this doc trail should be `AGENTS/WORKLOG.md` and `AGENTS/COVERAGE_100_TODO.md`.
 
-## Active TODOs
+## Working assumption
+- `core` is currently the highest-impact slice to unblock the project gate:
+  - `cargo llvm-cov --package clavisvault-core --lib --fail-under-lines 95` must pass first.
+  - Full 100% is only meaningful once the mandated gate is met and branch flake is controlled.
 
-### 1) Establish baseline measurement artifact
-- [ ] Create a reproducible coverage command set:
-  - `cargo llvm-cov --package clavisvault-core --lib --summary-only`
-  - `cargo llvm-cov --package clavisvault-core --lib --show-missing-lines`
-  - `cargo llvm-cov --package clavisvault-core --lib --text --output-path target/coverage.txt`
-- [ ] Add a short script in `scripts/` (if needed) to print per-file missed lines for each core file.
-- [ ] Capture and version a baseline snapshot in `AGENTS/WORKLOG.md` “Evidence” when each sweep updates.
+## Coverage Command Set (runbook)
+- `cargo llvm-cov --package clavisvault-core --lib --summary-only`
+- `cargo llvm-cov --package clavisvault-core --lib --show-missing-lines --output-path target/coverage-missing.txt`
+- `cargo llvm-cov --package clavisvault-core --lib --text --output-path target/coverage.txt`
+- Store any hard failures in `AGENTS/WORKLOG.md` "Evidence".
 
-### 2) Remove non-code coverage debt
-- [ ] Audit `crates/core/src/safe_file.rs`, `crates/core/src/shell.rs`, `crates/core/src/encryption.rs`, `crates/core/src/types.rs` for trailing dead lines/comments that provide no executable semantics.
-- [ ] Trim trailing blank segments and non-code noise only when confirmed they are not part of intentional formatting contract.
-- [ ] Re-run summary coverage after each cleanup commit.
+## TODO (priority order)
 
-### 3) Add missing branch/path tests where practical
-- [ ] Fill remaining uncovered branches in:
-  - `safe_file.rs`:
-    - explicit backup-path allocation success/failure edge branches not yet deterministically asserted
-    - restoration rollback failure branch in `atomic_write_with_fs_ops` with mocked restore failure
-  - `audit_log.rs`:
-    - `verify_ledger_integrity` branch coverage for mixed checkpoint retention invariants after partial corruption
-    - `prune_for_retention` edge when both `max_entries` and `max_age_days` apply simultaneously
-  - `encryption.rs`:
-    - `unlock_with_password_or_biometric` branch when `cached_key` and `biometric` are both provided but hook fails before cached fallback
-- [ ] Confirm branch tests use deterministic fixtures (no privileged/environment-dependent assertions without fallback handling).
+1. Make branch outcomes deterministic where possible
+- [ ] Replace flaky assertions around permission-denied tests with structural checks that remain deterministic across Linux runner privilege modes.
+- [ ] Add a minimal set of "must-fail" vs "may-pass" branches for Unix permission tests where writes can be bypassed by privileged runners.
+- [ ] Keep coverage intent notes inline with `// COVERAGE NOTE ...`.
 
-### 4) Document untestable or conditionally testable paths
-- [ ] Keep the following in-code coverage notes (already added in `safe_file.rs`):
-  - `#[cfg(windows)]` file-lock and read-only path handling
-  - `#[cfg(unix)]` permission-bit dependent tests
-- [ ] For each future intentionally untestable branch, add an inline comment in the form:
-  - `// COVERAGE NOTE: ... why it cannot be covered in this test environment ...`
-- [ ] Include fallback assertions where environment privilege differences can make results non-deterministic.
+2. Close missing logic branches in `crates/core/src/safe_file.rs`
+- [ ] Add/assert tests for `atomic_replace_path` candidate exhaustion and backup cleanup fallback behavior.
+- [ ] Add explicit negative path for:
+  - empty filename parent allocation failures.
+  - restore failures after partial write swap succeeds.
+- [ ] Ensure each uncovered path in `atomic_write_with_fs_ops` has deterministic test control.
+- [ ] Verify `fn trim_backups` older-backup pruning is deterministic on malformed directory contents.
 
-### 5) Validate final target
-- [ ] Verify core crate `--summary-only` is at 100% for lines and functions.
-- [ ] Reconcile `just ci-fast` or project-mandated gate outputs to ensure no collateral regressions.
+3. Close remaining debt in `crates/core/src/audit_log.rs`
+- [ ] Add mixed-checkpoint retention edge-case coverage:
+  - both `max_entries` and `max_age_days` apply in one pass,
+  - `verify_ledger_integrity` after partial checkpoint corruption.
+- [ ] Validate prune behavior when retention settings remove all but boundary checkpoint.
 
-## Impossible / non-coverable items (by definition, with justification)
-- `crates/core/src/safe_file.rs` Windows-only test paths under `#[cfg(windows)]`
-  - Why: rely on Windows `OpenOptionsExt::share_mode` and Windows read-only attribute semantics that do not execute on Unix.
-- `crates/core/src/safe_file.rs` Unix-only permission-bit tests under `#[cfg(unix)]`
-  - Why: Unix mode-bit behavior and root-owned directory edge cases are unavailable on Windows.
-- Permission-bypass branch handling in:
-  - `permission_denied_is_reported` and `backup_empty_file_creation_reports_error_when_parent_is_read_only`
-  - Why: write-denial behavior can vary on privileged CI/host runners; deterministic failure is not guaranteed, so assertions are intentionally tolerant.
+4. Close remaining debt in `crates/core/src/encryption.rs` and `crates/core/src/shell.rs`
+- [ ] Add branch tests for authentication fallback order (cached + biometric + legacy) where behavior is currently unexercised.
+- [ ] Add missing shell path for non-default env/permissions handling that currently lacks negative coverage.
 
-## Ownership
-- Primary owner: security / platform hardening owner
-- Verification owner: core test maintainer
+5. Stabilize coverage-only assertions
+- [ ] Expand in-code rationales for any branch that cannot be tested on one platform.
+- [ ] For non-deterministic host-policy behavior, convert to dual-path assertions.
+- [ ] Gate any host-sensitive tests behind explicit `cfg(unix)`/`cfg(windows)` and document why they are not universal.
 
+6. Validate target gate
+- [ ] Re-run summary-only coverage and verify:
+  - 100.00% lines
+  - 100.00% functions
+- [ ] Reconcile `just ci-fast` and at minimum run `cargo clippy --all-targets --all-features -D warnings` after each atomic increment.
+
+## Impossible / conditionally untestable items (must stay with explicit rationale)
+
+- `crates/core/src/safe_file.rs`: Windows-only path semantics in `#[cfg(windows)]` tests
+  - `backup_with_reserved_filename_reports_empty_file_error`:
+    - This scenario is inherently Windows-specific because reserved/invalid filename characters are validated by Windows APIs before file creation; Unix test runners do not hit that path.
+  - `atomic_write_revert_when_target_is_locked`:
+    - Windows supports native shared-lock behavior via `OpenOptionsExt::share_mode`; lock failure here depends on Windows file-share flags, which do not exist in the same form on Unix platforms.
+  - `atomic_write_over_readonly_file_succeeds`:
+    - Read-only attribute transitions are implemented through Windows metadata semantics; Unix permission model is mode-bit based and this test is not meaningful there.
+- `crates/core/src/safe_file.rs`: Unix-only path semantics in `#[cfg(unix)]` tests
+  - `atomic_replace_path_rejects_path_without_filename`:
+    - This validation is tied to Unix-style root-path edge cases and does not exist as the same runtime behavior on Windows.
+- `crates/core/src/safe_file.rs`: Host-privilege-sensitive permission behavior
+  - `permission_denied_is_reported` and
+    `backup_empty_file_creation_reports_error_when_parent_is_read_only`
+    - Permission-denied outcomes are influenced by runner privilege level (for example, elevated or permissive CI settings). These branches are covered structurally and intentionally allow both "hard deny" and "graceful passthrough" outcomes to keep the suite deterministic across environments.
+
+## Completion criteria
+- The TODO is complete only when every unchecked item here is done and the repository-level coverage artifact in `AGENTS/WORKLOG.md` is updated with a 100.00% snapshot.
