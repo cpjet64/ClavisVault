@@ -31,6 +31,9 @@ const PEER_STALE_AFTER: Duration = Duration::from_secs(5 * 60);
 const PEER_CLEANUP_INTERVAL: Duration = Duration::from_secs(30);
 const MAX_RELAY_PAYLOAD_BYTES: usize = 2048;
 const MAX_RELAY_DESTINATIONS: usize = 64;
+const MAX_RELAY_PEERS: usize = 1024;
+const MAX_SENDERS_PER_SOURCE_IP: usize = 128;
+const SOURCE_PEER_WINDOW: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct PubkeyHash([u8; 32]);
@@ -184,6 +187,7 @@ struct RelayState {
     peers: HashMap<PubkeyHash, PeerInfo>,
     limiter: RateLimiter,
     peer_limiter: PeerRateLimiter,
+    source_limiter: SourceConnectionLimiter,
     last_cleanup: Instant,
 }
 
@@ -196,11 +200,32 @@ impl RelayState {
                 PEER_RATE_LIMIT_PACKETS_PER_SECOND,
                 RATE_LIMIT_WINDOW,
             ),
+            source_limiter: SourceConnectionLimiter::new(
+                MAX_SENDERS_PER_SOURCE_IP,
+                SOURCE_PEER_WINDOW,
+            ),
             last_cleanup: now,
         }
     }
 
-    fn register_peer(&mut self, sender_pubkey_hash: PubkeyHash, addr: SocketAddr, now: Instant) {
+    fn register_peer(
+        &mut self,
+        sender_pubkey_hash: PubkeyHash,
+        addr: SocketAddr,
+        now: Instant,
+    ) -> bool {
+        if self.peers.contains_key(&sender_pubkey_hash) {
+            if let Some(peer) = self.peers.get_mut(&sender_pubkey_hash) {
+                peer.addr = addr;
+                peer.last_seen = now;
+            }
+            return true;
+        }
+
+        if self.peers.len() >= MAX_RELAY_PEERS {
+            return false;
+        }
+
         self.peers.insert(
             sender_pubkey_hash,
             PeerInfo {
@@ -208,6 +233,7 @@ impl RelayState {
                 last_seen: now,
             },
         );
+        true
     }
 
     fn cleanup_stale_peers(&mut self, now: Instant) {
@@ -216,6 +242,7 @@ impl RelayState {
         }
         self.last_cleanup = now;
         self.peer_limiter.cleanup_stale(now);
+        self.source_limiter.cleanup_stale(now);
         self.peers
             .retain(|_, peer| now.duration_since(peer.last_seen) <= PEER_STALE_AFTER);
     }
@@ -228,7 +255,8 @@ impl RelayState {
             return vec![target_peer.addr];
         }
 
-        self.peers
+        let mut destinations = self
+            .peers
             .iter()
             .filter_map(|(peer_hash, peer)| {
                 if *peer_hash == sender_pubkey_hash {
@@ -237,7 +265,47 @@ impl RelayState {
                     Some(peer.addr)
                 }
             })
-            .collect()
+            .collect::<Vec<_>>();
+        destinations.sort_unstable();
+        destinations.dedup();
+        destinations
+    }
+}
+
+#[derive(Debug)]
+struct SourceConnectionLimiter {
+    peers: HashMap<IpAddr, HashMap<PubkeyHash, Instant>>,
+    max_senders_per_window: usize,
+    window: Duration,
+}
+
+impl SourceConnectionLimiter {
+    fn new(max_senders_per_window: usize, window: Duration) -> Self {
+        Self {
+            peers: HashMap::new(),
+            max_senders_per_window,
+            window,
+        }
+    }
+
+    fn allow(&mut self, source_ip: IpAddr, sender_hash: PubkeyHash, now: Instant) -> bool {
+        let active = self.peers.entry(source_ip).or_default();
+
+        active.retain(|_, last_seen| now.duration_since(*last_seen) < self.window);
+
+        if active.len() >= self.max_senders_per_window && !active.contains_key(&sender_hash) {
+            return false;
+        }
+
+        active.insert(sender_hash, now);
+        true
+    }
+
+    fn cleanup_stale(&mut self, now: Instant) {
+        self.peers.retain(|_, active| {
+            active.retain(|_, last_seen| now.duration_since(*last_seen) < self.window);
+            !active.is_empty()
+        });
     }
 }
 
@@ -256,6 +324,8 @@ enum DatagramDecision {
 enum DatagramDropReason {
     SourceRateLimit,
     PeerRateLimit,
+    SourcePeerLimit,
+    PeerTableLimit,
     DestinationCapExceeded(usize),
     InvalidPacket,
 }
@@ -390,18 +460,24 @@ async fn run_relay(bind_addr: SocketAddr) -> Result<()> {
                 let destinations = match decision {
                     DatagramDecision::Forward(destinations) => destinations,
                     DatagramDecision::Drop(reason) => {
-                        match reason {
-                            DatagramDropReason::SourceRateLimit => {
-                                warn!("rate-limit exceeded for {}", src_addr.ip());
-                            }
-                            DatagramDropReason::PeerRateLimit => {
-                                warn!("peer rate-limit exceeded for sender");
-                            }
-                            DatagramDropReason::DestinationCapExceeded(count) => {
-                                warn!(
-                                    "dropping packet from {src_addr} with too many destinations: {count}"
-                                );
-                            }
+                    match reason {
+                        DatagramDropReason::SourceRateLimit => {
+                            warn!("rate-limit exceeded for {}", src_addr.ip());
+                        }
+                        DatagramDropReason::PeerRateLimit => {
+                            warn!("peer rate-limit exceeded for sender");
+                        }
+                        DatagramDropReason::SourcePeerLimit => {
+                            warn!("source peer limit exceeded for {}", src_addr.ip());
+                        }
+                        DatagramDropReason::PeerTableLimit => {
+                            warn!("peer table limit reached; dropping sender {src_addr}");
+                        }
+                        DatagramDropReason::DestinationCapExceeded(count) => {
+                            warn!(
+                                "dropping packet from {src_addr} with too many destinations: {count}"
+                            );
+                        }
                             DatagramDropReason::InvalidPacket => {
                                 debug!("dropping invalid packet from {src_addr}");
                             }
@@ -449,7 +525,16 @@ fn relay_packet_decision(
         return DatagramDecision::Drop(DatagramDropReason::PeerRateLimit);
     }
 
-    state.register_peer(packet.sender_pubkey_hash, source, now);
+    if !state
+        .source_limiter
+        .allow(source.ip(), packet.sender_pubkey_hash, now)
+    {
+        return DatagramDecision::Drop(DatagramDropReason::SourcePeerLimit);
+    }
+
+    if !state.register_peer(packet.sender_pubkey_hash, source, now) {
+        return DatagramDecision::Drop(DatagramDropReason::PeerTableLimit);
+    }
     let destinations = state.destinations_for(packet.sender_pubkey_hash, packet.payload);
     if destinations.len() > MAX_RELAY_DESTINATIONS {
         return DatagramDecision::Drop(DatagramDropReason::DestinationCapExceeded(
@@ -466,6 +551,12 @@ mod tests {
 
     fn sample_hash(seed: u8) -> PubkeyHash {
         PubkeyHash([seed; 32])
+    }
+
+    fn sample_hash_u16(seed: u16) -> PubkeyHash {
+        let mut bytes = [0_u8; 32];
+        bytes[0..2].copy_from_slice(&seed.to_le_bytes());
+        PubkeyHash(bytes)
     }
 
     fn build_packet(sender: PubkeyHash, payload: &[u8]) -> Vec<u8> {
@@ -553,6 +644,67 @@ mod tests {
             }
             _ => panic!("expected destination cap drop"),
         }
+    }
+
+    #[test]
+    fn source_peer_limit_blocks_new_hashes_per_source_ip() {
+        let now = Instant::now();
+        let mut state = RelayState::new(now);
+        let source: SocketAddr = "127.0.0.1:6000".parse().expect("source parse");
+        state.limiter.max_packets_per_window = 1000;
+
+        for index in 0..=MAX_SENDERS_PER_SOURCE_IP {
+            let sender = sample_hash_u16(u16::try_from(index).expect("index fits u16"));
+            let packet = build_packet(sender, b"signal");
+            let decision = relay_packet_decision(
+                &mut state,
+                source,
+                &packet,
+                now + Duration::from_millis(index as u64),
+            );
+            if index < MAX_SENDERS_PER_SOURCE_IP {
+                assert!(
+                    matches!(decision, DatagramDecision::Forward(_)),
+                    "sender {index} should be accepted"
+                );
+            } else {
+                assert!(
+                    matches!(
+                        decision,
+                        DatagramDecision::Drop(DatagramDropReason::SourcePeerLimit)
+                    ),
+                    "sender {index} should be blocked by source peer limit"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn peer_table_limit_rejects_unknown_sender_when_full() {
+        let now = Instant::now();
+        let mut state = RelayState::new(now);
+        let source: SocketAddr = "127.0.0.1:7000".parse().expect("source parse");
+        state.source_limiter = SourceConnectionLimiter::new(usize::MAX, SOURCE_PEER_WINDOW);
+
+        for index in 0..MAX_RELAY_PEERS {
+            let sender = sample_hash_u16(u16::try_from(index).expect("peer index fits u16"));
+            state.register_peer(
+                sender,
+                format!("127.0.0.1:{}", 8000 + index).parse().expect("addr"),
+                now,
+            );
+        }
+
+        let extra = sample_hash_u16(
+            u16::try_from(MAX_RELAY_PEERS)
+                .expect("max peer count must fit u16")
+                .saturating_add(1),
+        );
+        let packet = build_packet(extra, b"signal");
+        assert_eq!(
+            relay_packet_decision(&mut state, source, &packet, now + Duration::from_secs(1)),
+            DatagramDecision::Drop(DatagramDropReason::PeerTableLimit),
+        );
     }
 
     #[test]

@@ -1,12 +1,12 @@
 # Worklog
 
 ## Now
-- Validate remaining high-risk startup and session-handoff paths after the desktop identity repair changes.
+- Implement next high-confidence hardening slice for relay trust controls and verify telemetry.
 
 ## Next
-- Run a focused pass on CLI session-token compatibility warnings and relay hardening telemetry behavior.
-- Stage and commit the next highest-confidence hardening slice once validation completes.
-- Update AGENTS/WORKLOG after that commit.
+- Focused pass on CLI session-token compatibility warnings and secret transport.
+- Add explicit relay trust-boundary documentation updates once relay hardening behavior is stable.
+- Continue deep-dive verification before marking repository state complete.
 
 ## Later
 - Finalize any remaining docs/notes cleanup (masterplan/alerts migration notes).
@@ -22,6 +22,11 @@
   - CLI session-cache/signer test helpers avoid unnecessary `return` statements.
   - Server token verification logic now uses explicit combined checks.
 - Hardened desktop settings startup path so invalid cached remote identity material is repaired in-place instead of panicking.
+- Hardened relay input handling in `crates/relay/src/main.rs`:
+  - Added source-IP sender limiter and relay peer-table size limit.
+  - Enforced destination deduplication before fanout checks.
+  - Added hard-drop reasons for source peer and peer-table limit hits.
+  - Added tests for source-peer quota and full peer table rejection.
 
 ## Decisions Needed
 - Export signer persistence location and migration model: server-side keyring + explicit migration mode or dedicated CLI-managed trust file.
