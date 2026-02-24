@@ -1,18 +1,38 @@
 # Worklog
 
 ## Now
+- Classified repository as FINISHED/mostly complete from gates and marker scan:
+  - `just ci-fast` was run and is currently passing.
+  - Remaining risk is limited to security policy posture: advisory exceptions were still defined in `deny.toml` but `python scripts/validate_audit_exceptions.py` enforces zero-ignore policy for that file.
+- Current top-priority in-work item:
+  - Migrate advisory exception handling from `deny.toml` ignores to baseline-managed `security/advisory-baseline.toml` entries.
 - Classified repository state as FINISHED/mostly complete after the latest full documented gate and security verification reruns.
 - No remaining high-confidence blocked implementation stubs or failing tests are visible in source paths.
 - Re-ran advisory checks; only non-blocking informational advisories remain (known unmaintained/unsound transitive crates, no exploitable CVE findings).
 
 ## Next
-- Keep tracking transitive advisory pressure in `scripts/advisory_allowlist.json` until Tauri/GUI dependency graph upgrades away from GTK3-era crates.
+- Close the advisory-policy migration task by ensuring `deny.toml` is zero-ignore and `security/advisory-baseline.toml` contains all currently observed unmaintained/unsound advisories.
+- Keep tracking transitive advisory pressure in `security/advisory-baseline.toml` until dependency upgrades remove the GTK3-era/Unicode transitive chain.
 - Add a follow-up security review if/when relay protocol changes require additional malformed-traffic hardening.
 
 ## Later
 - Optional: triage low-risk follow-up hardening based on future findings.
 
 ## Done
+- Completed advisory-policy migration for the new zero-ignore baseline workflow:
+  - Removed advisory entries from `deny.toml` `advisories.ignore` and left it empty for advisory suppression.
+  - Added observed unmaintained/unsound advisories to `security/advisory-baseline.toml` with expiry/rationale entries.
+  - Updated baseline to match active advisory set (`RUSTSEC-2024-0384`/`0388` added; stale `RUSTSEC-2024-0429` removed).
+  - Verified:
+    - `python scripts/validate_audit_exceptions.py --deny-toml deny.toml` returns 0.
+    - `python scripts/enforce_advisory_policy.py` returns 0.
+    - `python scripts/validate_audit_exceptions_test.py` (7 tests) passes.
+    - `python scripts/enforce_advisory_policy_test.py` (7 tests) passes.
+- Completed repo-wide status refresh in-line with AGENTS/SPEC instructions:
+  - `just ci-fast` (hygiene + fmt + clippy + machete + build + nextest) passes cleanly.
+  - `213 tests run: 213 passed, 0 skipped` in the latest quick suite.
+  - In-source marker scan found no remaining high-confidence stubs (`todo!`, `unimplemented!`, `pass`, etc.) except test-only panic guards.
+  - Replaced a remaining test-only `panic!` in relay fanout-cap coverage with explicit `matches!` assertion plus count checks.
 - Completed repo-wide status refresh in-line with AGENTS/SPEC instructions:
   - `just ci-fast` (hygiene + fmt + clippy + machete + build + nextest) passes cleanly.
   - `213 tests run: 213 passed, 0 skipped` in the latest quick suite.
@@ -74,6 +94,10 @@
 - Whether to reduce desktop dependency risk by reworking transitive advisory-heavy crates or retaining allow-list with documented justification.
 
 ## Evidence
+- Security policy evidence for this change cycle:
+  - `python scripts/validate_audit_exceptions.py --deny-toml deny.toml` now passes.
+  - `python scripts/enforce_advisory_policy.py` now passes after baseline updates.
+  - `cargo deny check advisories` now reports the expected advisory set when no deny `ignore` entries are configured.
 - Reviewed `crates/core/src/export.rs`, `crates/core/src/types.rs`, `crates/core/src/policy.rs`, `crates/core/src/shell.rs`, `crates/core/src/audit_log.rs`.
 - Reviewed `crates/cli/src/main.rs`, `crates/desktop/src-tauri/src/lib.rs`, `crates/server/src/main.rs`, `crates/relay/src/main.rs`.
 - Verified format/lint/test gates after this change set (`just ci-fast`, package clippy/tests for core/cli/server/desktop-tauri/relay plus updated scope work).
