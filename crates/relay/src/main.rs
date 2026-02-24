@@ -680,6 +680,33 @@ mod tests {
     }
 
     #[test]
+    fn source_rate_limit_blocks_bursts_per_ip() {
+        let now = Instant::now();
+        let mut state = RelayState::new(now);
+        state.limiter.max_packets_per_window = 2;
+
+        let source: SocketAddr = "127.0.0.1:7001".parse().expect("source parse");
+        let packet = build_packet(sample_hash(33), b"heartbeat");
+
+        assert!(matches!(
+            relay_packet_decision(&mut state, source, &packet, now),
+            DatagramDecision::Forward(_)
+        ));
+        assert!(matches!(
+            relay_packet_decision(&mut state, source, &packet, now),
+            DatagramDecision::Forward(_)
+        ));
+        assert!(matches!(
+            relay_packet_decision(&mut state, source, &packet, now),
+            DatagramDecision::Drop(DatagramDropReason::SourceRateLimit)
+        ));
+        assert!(matches!(
+            relay_packet_decision(&mut state, source, &packet, now + RATE_LIMIT_WINDOW),
+            DatagramDecision::Forward(_)
+        ));
+    }
+
+    #[test]
     fn peer_table_limit_rejects_unknown_sender_when_full() {
         let now = Instant::now();
         let mut state = RelayState::new(now);

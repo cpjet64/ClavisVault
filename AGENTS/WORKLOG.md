@@ -44,6 +44,8 @@
   - Enforced destination deduplication before fanout checks.
   - Added hard-drop reasons for source peer and peer-table limit hits.
   - Added tests for source-peer quota and full peer table rejection.
+- Added relay burst-flood regression coverage:
+  - New `source_rate_limit_blocks_bursts_per_ip` test verifies per-source IP rate limiting returns `SourceRateLimit` under burst conditions and recovers after window expiry.
 
 ## Decisions Needed
 - Export signer persistence location and migration model: server-side keyring + explicit migration mode or dedicated CLI-managed trust file.
