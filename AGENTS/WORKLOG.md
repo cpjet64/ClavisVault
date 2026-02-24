@@ -1,10 +1,10 @@
 # Worklog
 
 ## Now
-- Validate relay trust-boundary and TTL/scoping behavior under load; close remaining relay trust-boundary documentation loop.
+- Continue relay trust-boundary hardening and malformed-traffic handling edge cases under load.
 
 ## Next
-- Continue relay trust-boundary hardening and malformed-traffic handling edge cases from live behavior checks.
+- Resolve relay hardening decision points (destination cap behavior and legacy compatibility boundaries) and continue malformed-traffic load checks.
 - Run a repository-wide pass for remaining high-confidence security TODOs and update evidence.
 
 ## Later
