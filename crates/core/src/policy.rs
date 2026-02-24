@@ -450,6 +450,49 @@ max_age_days = 30
     }
 
     #[test]
+    fn validate_rule_uses_last_updated_anchor_when_created_timestamp_is_zero() {
+        let now = Utc::now();
+        let mut keys = HashMap::new();
+        keys.insert(
+            "ANCHOR".to_string(),
+            KeyEntry {
+                name: "ANCHOR".to_string(),
+                description: "valid".to_string(),
+                tags: vec!["prod".to_string()],
+                last_updated: now - chrono::Duration::days(15),
+                created_at: chrono::DateTime::from_timestamp(0, 0)
+                    .expect("epoch timestamp is valid"),
+                expires_at: None,
+                rotation_period_days: None,
+                warn_before_days: None,
+                last_rotated_at: None,
+                owner: Some("team".to_string()),
+                secret: Some("value".to_string()),
+            },
+        );
+        let vault = VaultData {
+            version: 2,
+            salt: [11u8; 16],
+            keys,
+        };
+        let policy = SecretPolicy {
+            default_rotation_period_days: None,
+            default_warn_before_days: None,
+            rules: vec![SecretPolicyRule {
+                pattern: "*".to_string(),
+                require_description: false,
+                require_tags: false,
+                require_owner: false,
+                require_expiry: false,
+                max_age_days: Some(7),
+            }],
+        };
+
+        let violations = validate_vault_policy(&vault, &policy, now);
+        assert!(violations.iter().any(|v| v.code == "max_age_exceeded"));
+    }
+
+    #[test]
     fn pattern_matches_handles_anchored_and_wildcard_forms() {
         assert!(pattern_matches("*", "OPENAI_API_KEY"));
         assert!(pattern_matches("OPENAI_*", "OPENAI_API_KEY"));
@@ -481,5 +524,12 @@ max_age_days = 30
         assert!(pattern_matches("A*B*C", "AxxByyC"));
         assert!(!pattern_matches("A*B*C", "AxxCyyB"));
         assert!(!pattern_matches("A*B*C", "AxxB"));
+    }
+
+    #[test]
+    fn pattern_matches_skips_empty_leading_and_trailing_wildcard_segments() {
+        assert!(pattern_matches("**A**", "zzAyy"));
+        assert!(pattern_matches("*A*", "A"));
+        assert!(!pattern_matches("*A**", "B"));
     }
 }

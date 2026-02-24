@@ -8,11 +8,11 @@
 
 ## Current state (2026-02-24)
 - Core summary:
-  - Lines: `87.56%` (4,510 covered / 561 missed)
-  - Functions: `79.16%` (451 covered / 94 missed)
+  - Lines: `87.80%` (4,589 covered / 560 missed, as of latest `cargo llvm-cov`)
+  - Functions: `79.48%` (458 covered / 94 missed, as of latest `cargo llvm-cov`)
 - Largest debt files:
-  - `crates/core/src/shell.rs` (Lines `74.86%`, Functions `66.67%`)
   - `crates/core/src/safe_file.rs` (Lines `69.23%`, Functions `56.86%`)
+  - `crates/core/src/shell.rs` (Lines `70.49%`, Functions `70.00%`)
   - `crates/core/src/audit_log.rs` (Lines `86.23%`, Functions `80.00%`)
   - `crates/core/src/types.rs` (Lines `87.65%`, Functions `76.60%`)
   - `crates/core/src/encryption.rs` (Lines `87.58%`, Functions `86.67%`)
@@ -45,7 +45,7 @@
 
 3. Close validation debt in policy/rotation
 - [ ] Cover remaining `pattern_matches` wildcard and edge branches in `policy.rs`:
-  - `pattern == "*"`, empty pattern, and non-object pattern fragments.
+  - `pattern == "*"`, `""`, and non-object pattern fragments still show coverage misses.
 - [ ] Cover rotation due/expired/healthy and no-policy branches with boundary-day assertions in `rotation.rs` for `warn_before_days` default and due threshold equality.
 
 4. Cover `audit_log.rs` ledger/integrity and retention interactions

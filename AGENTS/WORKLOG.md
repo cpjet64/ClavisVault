@@ -3,10 +3,11 @@
 ## Now
 - Repository is in `IN-PROGRESS` mode due `clavisvault-core` coverage debt.
 - Latest `cargo llvm-cov --package clavisvault-core --lib --summary-only`:
-  - Line coverage: `88.22%` (4,528 covered / 561 missed)
-  - Function coverage: `79.16%` (451 covered / 94 missed)
+  - Line coverage: `87.80%` (4,589 covered / 560 missed)
+  - Function coverage: `79.48%` (458 covered / 94 missed)
 - Work is now gated by completing `AGENTS/COVERAGE_100_TODO.md` in strict file-level slices.
-- Added focused shell surface tests in this slice; `shell.rs` still has uncovered assignment/hook branch lines to address in the next slice.
+- Added focused shell surface tests in the previous slice and `policy.rs` wildcard edge tests in this slice.
+- `policy.rs` still has five branch-level misses; shell remains the largest remaining file-level target with low function coverage.
 - `cargo llvm-cov --package clavisvault-core --lib --show-missing-lines` output is now used as the per-slice source of truth.
 - `--fail-under-lines 95` remains failing; this is expected at this stage.
 
@@ -40,6 +41,7 @@
 - `cargo llvm-cov --package clavisvault-core --lib --fail-under-lines 95` (fails at current slice)
 - `AGENTS/COVERAGE_100_TODO.md`
 - `rg -n "TODO|FIXME|XXX|HACK|not implemented|stub|unimplemented!|todo!|panic!\(|unreachable!\(" AGENTS/WORKLOG.md AGENTS/COVERAGE_100_TODO.md docs crates/core/src`
+- `cargo test -p clavisvault-core --lib policy::tests`
 
 ## Assumptions
 - `AGENTS/WORKLOG.md` and `AGENTS/COVERAGE_100_TODO.md` are the authoritative local worklist and coverage control files for this cycle.
