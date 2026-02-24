@@ -171,7 +171,7 @@ mod tests {
     use chrono::{Duration, Utc};
     use std::collections::HashMap;
 
-    use super::{SecretPolicy, SecretPolicyRule, validate_vault_policy};
+    use super::{SecretPolicy, SecretPolicyRule, pattern_matches, validate_vault_policy};
     use crate::types::{KeyEntry, VaultData};
 
     fn key_entry(
@@ -262,5 +262,22 @@ mod tests {
             violations.iter().any(|v| v.code == "max_age_exceeded"),
             "policy should evaluate age from rotation/creation anchor rather than metadata update time"
         );
+    }
+
+    #[test]
+    fn pattern_matches_handles_anchored_and_wildcard_forms() {
+        assert!(pattern_matches("*", "OPENAI_API_KEY"));
+        assert!(pattern_matches("OPENAI_*", "OPENAI_API_KEY"));
+        assert!(pattern_matches("*_API_KEY", "OPENAI_API_KEY"));
+        assert!(pattern_matches("OPENAI*KEY", "OPENAI_API_KEY"));
+        assert!(!pattern_matches("GITHUB_*", "OPENAI_API_KEY"));
+        assert!(!pattern_matches("OPENAI_API_KEY", "OPENAI_TOKEN"));
+    }
+
+    #[test]
+    fn pattern_matches_requires_segment_order() {
+        assert!(pattern_matches("A*B*C", "AxxByyC"));
+        assert!(!pattern_matches("A*B*C", "AxxCyyB"));
+        assert!(!pattern_matches("A*B*C", "AxxB"));
     }
 }
