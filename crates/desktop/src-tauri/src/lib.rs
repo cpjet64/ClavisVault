@@ -180,6 +180,15 @@ fn test_keyring_store() -> &'static Mutex<HashMap<String, String>> {
     TEST_KEYRING.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+#[cfg(test)]
+fn test_keyring_guard() -> MutexGuard<'static, ()> {
+    static TEST_KEYRING_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
+    TEST_KEYRING_MUTEX
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("test keyring mutex poisoned")
+}
+
 fn keyring_record_name_for_remote_session(remote_id: &str) -> String {
     format!("{REMOTE_SESSION_TOKEN_RECORD_PREFIX}{remote_id}")
 }
@@ -1111,7 +1120,7 @@ fn import_vault(
             );
         }
         ExportSignerTrust::Mismatch => {
-            bail!("export signer mismatch for trusted key id");
+            return Err("export signer mismatch for trusted key id".to_string());
         }
         ExportSignerTrust::LegacyManifest => {}
     }
@@ -3515,6 +3524,7 @@ message: "Optional update"
 
     #[test]
     fn desktop_settings_serializes_without_remote_secrets() {
+        let _guard = test_keyring_guard();
         test_keyring_store().lock().unwrap().clear();
         let private_key = "0".repeat(64);
         let settings = DesktopSettings {
@@ -3544,6 +3554,7 @@ message: "Optional update"
 
     #[test]
     fn legacy_remote_secrets_are_migrated_to_keyring() {
+        let _guard = test_keyring_guard();
         test_keyring_store().lock().unwrap().clear();
         let legacy_private_key = "11".repeat(32);
         let remote_id = "legacy-remote-id".to_string();
@@ -3586,15 +3597,16 @@ message: "Optional update"
             None
         );
         assert!(
-            !normalized
+            normalized
                 .remotes
                 .first()
-                .is_none_or(|remote| remote.session_token.is_some())
+                .is_some_and(|remote| remote.session_token.is_none())
         );
     }
 
     #[test]
     fn legacy_remote_session_token_requires_remote_id_for_migration() {
+        let _guard = test_keyring_guard();
         test_keyring_store().lock().unwrap().clear();
         let settings = DesktopSettings {
             remote_client_private_key: None,
@@ -3621,6 +3633,7 @@ message: "Optional update"
 
     #[test]
     fn remote_session_token_is_loaded_from_keyring_for_requests() {
+        let _guard = test_keyring_guard();
         test_keyring_store().lock().unwrap().clear();
         let remote_id = "runtime-remote-id".to_string();
         let token = "runtime-token";
