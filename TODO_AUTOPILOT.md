@@ -1,11 +1,11 @@
 # Autopilot Worklog
 
 ## Now
-- Commit alert acknowledgement version-order correctness fix.
+- Finalize docs-to-implementation alignment pass and commit current mismatch fixes.
 
 ## Next
-- Run finished-mode scan for additional correctness/security hardening targets.
-- Apply next atomic improvement with focused tests.
+- Continue finished-mode scan for correctness/security edge cases.
+- If no further high-impact issues are found, shift to lower-priority maintainability cleanup.
 
 ## Later
 - Scan for additional finished-mode hardening work (security/correctness, flaky tests, maintainability).
@@ -17,6 +17,11 @@
 - Fixed alert acknowledgement version comparison to numeric dot-segment comparison (prevents lexicographic mis-ordering like `0.1.10` vs `0.1.9`).
 - Added regression test: `alert_acknowledgement_uses_numeric_version_ordering`.
 - Verification run: `cargo fmt` and `cargo test -p clavisvault-desktop-tauri alert_acknowledgement_uses_numeric_version_ordering -- --nocapture` (PASS).
+- Fixed numeric comparator trailing-zero equivalence (`1`, `1.0`, `1.0.0`) with regression test `version_leq_treats_missing_segments_as_zero`.
+- Hardened alert dedupe conversion to cap extreme `dedupe_hours` and prevent chrono overflow panic.
+- Added regression test: `dedupe_active_alerts_handles_large_dedupe_hours_without_overflow`.
+- Updated `docs/SPEC.md` server behavior wording to match implemented authenticated remote `erase` command.
+- Synced `masterplan.md` matrix with that SPEC alignment fix and code evidence.
 
 ## Decisions Needed
 - None.

@@ -209,7 +209,8 @@ clavisvault-server [--data-dir /var/lib/clavisvault]
 - Own master password (clavisvault-server set-password)
 - Only accepts full-vault push over the encrypted tunnel
 - Overwrites local vault, returns SHA-256 ACK
-- No edit/delete API — desktop is source of truth
+- Accepts full-vault push over the encrypted tunnel and an explicit authenticated `erase` remote command.
+- Desktop remains the source of truth for key edits and routine vault mutation flows.
 - Runs as tokio daemon, ready for systemd/Docker
 
 ## 5. Relay Crate
