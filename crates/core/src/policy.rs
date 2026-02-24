@@ -128,6 +128,9 @@ fn validate_rule(
 }
 
 fn pattern_matches(pattern: &str, value: &str) -> bool {
+    if pattern.is_empty() {
+        return value.is_empty();
+    }
     if pattern == "*" {
         return true;
     }
@@ -135,35 +138,65 @@ fn pattern_matches(pattern: &str, value: &str) -> bool {
         return pattern == value;
     }
 
-    let parts: Vec<&str> = pattern.split('*').collect();
-    if parts.is_empty() {
-        return true;
-    }
-    let anchored_start = !pattern.starts_with('*');
-    let anchored_end = !pattern.ends_with('*');
-    let mut cursor = 0usize;
-
-    for (i, part) in parts.iter().enumerate() {
-        if part.is_empty() {
-            continue;
+    let starts_with_wildcard = pattern.starts_with('*');
+    let ends_with_wildcard = pattern.ends_with('*');
+    let mut segments: Vec<&str> = pattern.split('*').collect();
+    if starts_with_wildcard {
+        while let Some(first) = segments.first() {
+            if first.is_empty() {
+                let _ = segments.remove(0);
+            } else {
+                break;
+            }
         }
-        if i == 0 && anchored_start {
-            if !value[cursor..].starts_with(part) {
+    }
+
+    let mut tail = value;
+
+    if starts_with_wildcard {
+        if let Some(first) = segments.first().filter(|value| !value.is_empty()) {
+            if let Some(pos) = tail.find(first) {
+                tail = &tail[pos + first.len()..];
+                let _ = segments.remove(0);
+            } else {
                 return false;
             }
-            cursor += part.len();
+        }
+    } else if let Some(prefix) = segments.first() {
+        if prefix.is_empty() || !tail.starts_with(prefix) {
+            return false;
+        }
+        tail = &tail[prefix.len()..];
+        let _ = segments.remove(0);
+    }
+
+    let end_anchor = if ends_with_wildcard {
+        None
+    } else {
+        while let Some(last) = segments.last() {
+            if !last.is_empty() {
+                break;
+            }
+            segments.pop();
+        }
+        segments.pop()
+    };
+
+    for segment in segments {
+        if segment.is_empty() {
             continue;
         }
-        if i == parts.len() - 1 && anchored_end {
-            return value[cursor..].ends_with(part);
-        }
-        if let Some(pos) = value[cursor..].find(part) {
-            cursor += pos + part.len();
+        if let Some(pos) = tail.find(segment) {
+            tail = &tail[pos + segment.len()..];
         } else {
             return false;
         }
     }
-    true
+
+    match end_anchor {
+        Some(end) => tail.ends_with(end),
+        None => true,
+    }
 }
 
 #[cfg(test)]
@@ -272,6 +305,23 @@ mod tests {
         assert!(pattern_matches("OPENAI*KEY", "OPENAI_API_KEY"));
         assert!(!pattern_matches("GITHUB_*", "OPENAI_API_KEY"));
         assert!(!pattern_matches("OPENAI_API_KEY", "OPENAI_TOKEN"));
+    }
+
+    #[test]
+    fn pattern_matches_is_utf8_safe_for_multibyte_values() {
+        let value = "🔒secret🧪";
+        assert!(pattern_matches("🔒*🧪", value));
+        assert!(pattern_matches("*secret*", value));
+        assert!(pattern_matches("🔒secret🧪", value));
+        assert!(!pattern_matches("*💥", value));
+    }
+
+    #[test]
+    fn pattern_matches_handles_empty_and_mixed_asterisks() {
+        assert!(pattern_matches("", ""));
+        assert!(!pattern_matches("", "x"));
+        assert!(pattern_matches("🔒**🧪", "🔒abc🧪"));
+        assert!(!pattern_matches("🔒**🧪", "abc🔒"));
     }
 
     #[test]

@@ -266,6 +266,7 @@ Security Invariants (audited in every CI run)
   - `created_at`, `expires_at`, `rotation_period_days`, `warn_before_days`, `last_rotated_at`, `owner`
 - Export manifest format `v2` is signed and includes:
   - `payload_sha256`, `key_count`, `vault_version`, `signer_key_id`, `signer_public_key`, `signature`
+- Legacy export manifest imports are policy-gated (`allow` / `warn` / `block`) via `ExportSignerTrustPolicy.legacyImportMode`; desktop settings default to `warn`, hardened deployments can set `block`.
 - Desktop settings include `hardwareBackedUnlockEnabled` and alert acknowledgement state.
 - Tamper-evident audit chain verification command is exposed to desktop and CLI.
 - New desktop commands:

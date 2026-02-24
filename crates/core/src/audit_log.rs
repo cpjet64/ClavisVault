@@ -58,23 +58,29 @@ pub struct AuditLog {
     entries: Vec<AuditEntry>,
     ledger: AuditLedger,
     max_entries: usize,
+    max_age_days: i64,
     checkpoint_every: usize,
 }
 
 impl Default for AuditLog {
     fn default() -> Self {
-        Self::new(10_000)
+        Self::new_with_retention(10_000, 90)
     }
 }
 
 impl AuditLog {
-    pub fn new(max_entries: usize) -> Self {
+    pub fn new_with_retention(max_entries: usize, max_age_days: i64) -> Self {
         Self {
             entries: Vec::new(),
             ledger: AuditLedger::default(),
             max_entries,
+            max_age_days,
             checkpoint_every: 128,
         }
+    }
+
+    pub fn new(max_entries: usize) -> Self {
+        Self::new_with_retention(max_entries, 90)
     }
 
     pub fn record(
@@ -85,6 +91,28 @@ impl AuditLog {
     ) {
         let detail = detail.into();
         let now = Utc::now();
+        self.record_with_timestamp(operation, target, detail, now);
+    }
+
+    pub fn entries(&self) -> &[AuditEntry] {
+        &self.entries
+    }
+
+    pub fn ledger(&self) -> &AuditLedger {
+        &self.ledger
+    }
+
+    pub fn verify_integrity(&self) -> AuditIntegrityStatus {
+        verify_ledger_integrity(&self.ledger)
+    }
+
+    fn record_with_timestamp(
+        &mut self,
+        operation: AuditOperation,
+        target: Option<String>,
+        detail: String,
+        now: DateTime<Utc>,
+    ) {
         self.entries.push(AuditEntry {
             operation: operation.clone(),
             target: target.clone(),
@@ -131,28 +159,41 @@ impl AuditLog {
             });
         }
 
+        self.prune_for_retention(now);
+    }
+
+    fn prune_for_retention(&mut self, now: DateTime<Utc>) {
         if self.entries.len() > self.max_entries {
             let overflow = self.entries.len() - self.max_entries;
-            self.entries.drain(0..overflow);
+            if overflow > 0 {
+                self.entries.drain(0..overflow);
+                let ledger_overflow = self.ledger.entries.len().saturating_sub(self.max_entries);
+                if ledger_overflow > 0 {
+                    self.ledger.entries.drain(0..ledger_overflow);
+                }
+            }
         }
-    }
 
-    pub fn entries(&self) -> &[AuditEntry] {
-        &self.entries
-    }
+        if self.max_age_days > 0 {
+            let cutoff = now - Duration::days(self.max_age_days);
+            self.entries.retain(|entry| entry.at >= cutoff);
+            self.ledger.entries.retain(|entry| entry.at >= cutoff);
+            self.ledger
+                .checkpoints
+                .retain(|checkpoint| checkpoint.at >= cutoff);
+        }
 
-    pub fn ledger(&self) -> &AuditLedger {
-        &self.ledger
-    }
-
-    pub fn verify_integrity(&self) -> AuditIntegrityStatus {
-        verify_ledger_integrity(&self.ledger)
+        if let Some(first_entry) = self.ledger.entries.first() {
+            self.ledger
+                .checkpoints
+                .retain(|checkpoint| checkpoint.index >= first_entry.index);
+        }
     }
 }
 
 pub fn verify_ledger_integrity(ledger: &AuditLedger) -> AuditIntegrityStatus {
     let mut previous = "0".repeat(64);
-    for entry in &ledger.entries {
+    for (position, entry) in ledger.entries.iter().enumerate() {
         let recomputed = chain_hash(
             entry.index,
             entry.at,
@@ -177,7 +218,7 @@ pub fn verify_ledger_integrity(ledger: &AuditLedger) -> AuditIntegrityStatus {
             &entry.prev_hash_hex,
         );
 
-        if entry.prev_hash_hex != previous {
+        if position > 0 && entry.prev_hash_hex != previous {
             return AuditIntegrityStatus::Invalid {
                 index: entry.index,
                 reason: "previous hash link mismatch".to_string(),
@@ -260,7 +301,34 @@ mod tests {
 
         assert_eq!(log.entries().len(), 3);
         assert_eq!(log.entries()[0].operation, AuditOperation::Copy);
-        assert_eq!(log.ledger().entries.len(), 4);
+        assert_eq!(log.ledger().entries.len(), 3);
+    }
+
+    #[test]
+    fn audit_log_prunes_entries_by_age() {
+        let mut log = AuditLog::new_with_retention(10, 1);
+        let now = Utc::now();
+        let recent = now - Duration::days(0);
+        let stale = now - Duration::days(2);
+        log.record_with_timestamp(
+            AuditOperation::Unlock,
+            Some("K1".to_string()),
+            "stale".to_string(),
+            stale,
+        );
+        log.record_with_timestamp(
+            AuditOperation::Copy,
+            Some("K2".to_string()),
+            "recent".to_string(),
+            recent,
+        );
+        log.record(AuditOperation::Push, None, "fresh");
+
+        assert_eq!(log.entries().len(), 2);
+        assert_eq!(log.entries()[0].target.as_deref(), Some("K2"));
+        assert_eq!(log.ledger().entries[0].target.as_deref(), Some("K2"));
+        assert_eq!(log.ledger().entries.len(), 2);
+        assert_eq!(log.verify_integrity(), AuditIntegrityStatus::Valid);
     }
 
     #[test]

@@ -25,9 +25,12 @@ const DEFAULT_BIND_ADDR: &str = "0.0.0.0:51820";
 const PUBLIC_RELAY_EXAMPLE: &str = "relay.clavisvault.app:51820";
 
 const RATE_LIMIT_PACKETS_PER_SECOND: u32 = 50;
+const PEER_RATE_LIMIT_PACKETS_PER_SECOND: u32 = 20;
 const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(1);
 const PEER_STALE_AFTER: Duration = Duration::from_secs(5 * 60);
 const PEER_CLEANUP_INTERVAL: Duration = Duration::from_secs(30);
+const MAX_RELAY_PAYLOAD_BYTES: usize = 2048;
+const MAX_RELAY_DESTINATIONS: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct PubkeyHash([u8; 32]);
@@ -124,9 +127,63 @@ impl RateLimiter {
 }
 
 #[derive(Debug)]
+struct PeerRateLimiter {
+    per_peer: HashMap<PubkeyHash, RateLimitEntry>,
+    max_packets_per_window: u32,
+    window: Duration,
+}
+
+impl PeerRateLimiter {
+    fn new(max_packets_per_window: u32, window: Duration) -> Self {
+        Self {
+            per_peer: HashMap::new(),
+            max_packets_per_window,
+            window,
+        }
+    }
+
+    fn allow(&mut self, peer: PubkeyHash, now: Instant) -> bool {
+        let max_packets = self.max_packets_per_window as usize;
+        let entry = self
+            .per_peer
+            .entry(peer)
+            .or_insert_with(|| RateLimitEntry::new(now));
+
+        while let Some(&oldest) = entry.packet_timestamps.front() {
+            if now.duration_since(oldest) >= self.window {
+                entry.packet_timestamps.pop_front();
+            } else {
+                break;
+            }
+        }
+
+        if entry.packet_timestamps.len() >= max_packets {
+            return false;
+        }
+
+        entry.packet_timestamps.push_back(now);
+        true
+    }
+
+    fn cleanup_stale(&mut self, now: Instant) {
+        self.per_peer.retain(|_, entry| {
+            while let Some(&oldest) = entry.packet_timestamps.front() {
+                if now.duration_since(oldest) >= self.window {
+                    entry.packet_timestamps.pop_front();
+                } else {
+                    break;
+                }
+            }
+            !entry.packet_timestamps.is_empty()
+        });
+    }
+}
+
+#[derive(Debug)]
 struct RelayState {
     peers: HashMap<PubkeyHash, PeerInfo>,
     limiter: RateLimiter,
+    peer_limiter: PeerRateLimiter,
     last_cleanup: Instant,
 }
 
@@ -135,6 +192,10 @@ impl RelayState {
         Self {
             peers: HashMap::new(),
             limiter: RateLimiter::new(RATE_LIMIT_PACKETS_PER_SECOND, RATE_LIMIT_WINDOW),
+            peer_limiter: PeerRateLimiter::new(
+                PEER_RATE_LIMIT_PACKETS_PER_SECOND,
+                RATE_LIMIT_WINDOW,
+            ),
             last_cleanup: now,
         }
     }
@@ -154,6 +215,7 @@ impl RelayState {
             return;
         }
         self.last_cleanup = now;
+        self.peer_limiter.cleanup_stale(now);
         self.peers
             .retain(|_, peer| now.duration_since(peer.last_seen) <= PEER_STALE_AFTER);
     }
@@ -182,6 +244,20 @@ impl RelayState {
 enum Command {
     Run { bind_addr: SocketAddr },
     Help,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DatagramDecision {
+    Forward(Vec<SocketAddr>),
+    Drop(DatagramDropReason),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DatagramDropReason {
+    SourceRateLimit,
+    PeerRateLimit,
+    DestinationCapExceeded(usize),
+    InvalidPacket,
 }
 
 #[tokio::main]
@@ -251,6 +327,12 @@ fn parse_relay_packet(datagram: &[u8]) -> Result<RelayPacket<'_>> {
 
     let payload_len =
         u16::from_be_bytes([datagram[LENGTH_OFFSET], datagram[LENGTH_OFFSET + 1]]) as usize;
+    if payload_len == 0 {
+        bail!("empty relay payload");
+    }
+    if payload_len > MAX_RELAY_PAYLOAD_BYTES {
+        bail!("relay payload exceeds size limit");
+    }
     let actual_payload_len = datagram.len() - HEADER_LEN;
     if payload_len != actual_payload_len {
         bail!("declared payload len does not match datagram size");
@@ -303,25 +385,33 @@ async fn run_relay(bind_addr: SocketAddr) -> Result<()> {
                 let now = Instant::now();
                 state.cleanup_stale_peers(now);
 
-                if !state.limiter.allow(src_addr.ip(), now) {
-                    warn!("rate-limit exceeded for {}", src_addr.ip());
-                    continue;
-                }
-
                 let datagram = &buffer[..len];
-                let packet = match parse_relay_packet(datagram) {
-                    Ok(packet) => packet,
-                    Err(err) => {
-                        debug!("dropping invalid packet from {src_addr}: {err:#}");
+                let decision = relay_packet_decision(&mut state, src_addr, datagram, now);
+                let destinations = match decision {
+                    DatagramDecision::Forward(destinations) => destinations,
+                    DatagramDecision::Drop(reason) => {
+                        match reason {
+                            DatagramDropReason::SourceRateLimit => {
+                                warn!("rate-limit exceeded for {}", src_addr.ip());
+                            }
+                            DatagramDropReason::PeerRateLimit => {
+                                warn!("peer rate-limit exceeded for sender");
+                            }
+                            DatagramDropReason::DestinationCapExceeded(count) => {
+                                warn!(
+                                    "dropping packet from {src_addr} with too many destinations: {count}"
+                                );
+                            }
+                            DatagramDropReason::InvalidPacket => {
+                                debug!("dropping invalid packet from {src_addr}");
+                            }
+                        }
                         continue;
                     }
                 };
 
-                state.register_peer(packet.sender_pubkey_hash, src_addr, now);
-                let destinations = state.destinations_for(packet.sender_pubkey_hash, packet.payload);
-
-                for destination in destinations {
-                    if destination == src_addr {
+                for destination in &destinations {
+                    if *destination == src_addr {
                         continue;
                     }
                     if let Err(err) = socket.send_to(datagram, destination).await {
@@ -338,6 +428,36 @@ async fn run_relay(bind_addr: SocketAddr) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn relay_packet_decision(
+    state: &mut RelayState,
+    source: SocketAddr,
+    datagram: &[u8],
+    now: Instant,
+) -> DatagramDecision {
+    if !state.limiter.allow(source.ip(), now) {
+        return DatagramDecision::Drop(DatagramDropReason::SourceRateLimit);
+    }
+
+    let packet = match parse_relay_packet(datagram) {
+        Ok(packet) => packet,
+        Err(_) => return DatagramDecision::Drop(DatagramDropReason::InvalidPacket),
+    };
+
+    if !state.peer_limiter.allow(packet.sender_pubkey_hash, now) {
+        return DatagramDecision::Drop(DatagramDropReason::PeerRateLimit);
+    }
+
+    state.register_peer(packet.sender_pubkey_hash, source, now);
+    let destinations = state.destinations_for(packet.sender_pubkey_hash, packet.payload);
+    if destinations.len() > MAX_RELAY_DESTINATIONS {
+        return DatagramDecision::Drop(DatagramDropReason::DestinationCapExceeded(
+            destinations.len(),
+        ));
+    }
+
+    DatagramDecision::Forward(destinations)
 }
 
 #[cfg(test)]
@@ -383,12 +503,85 @@ mod tests {
     }
 
     #[test]
+    fn malformed_packet_is_dropped() {
+        let mut state = RelayState::new(Instant::now());
+        let source: SocketAddr = "127.0.0.1:5000".parse().expect("source parse");
+        let datagram = vec![0_u8; 4];
+        let decision = relay_packet_decision(&mut state, source, &datagram, Instant::now());
+        assert!(matches!(
+            decision,
+            DatagramDecision::Drop(DatagramDropReason::InvalidPacket)
+        ));
+    }
+
+    #[test]
     fn parse_packet_rejects_mismatched_payload_len() {
         let sender = sample_hash(4);
         let mut packet = build_packet(sender, b"hello");
         packet[9] = 0;
         packet[10] = 1;
         assert!(parse_relay_packet(&packet).is_err());
+    }
+
+    #[test]
+    fn destination_fanout_cap_causes_drop() {
+        let now = Instant::now();
+        let sender = sample_hash(21);
+        let mut state = RelayState::new(now);
+        for index in 0_u8..70 {
+            state.register_peer(
+                sample_hash(index),
+                format!("127.0.0.1:{}", 3500 + u16::from(index))
+                    .parse()
+                    .expect("addr"),
+                now,
+            );
+        }
+
+        let packet = b"compact-payload";
+        let datagram = build_packet(sender, packet);
+        let decision = relay_packet_decision(
+            &mut state,
+            "127.0.0.1:5001".parse().expect("source"),
+            &datagram,
+            now,
+        );
+        match decision {
+            DatagramDecision::Drop(DatagramDropReason::DestinationCapExceeded(count)) => {
+                assert_eq!(count, 69);
+                assert!(count > MAX_RELAY_DESTINATIONS);
+            }
+            _ => panic!("expected destination cap drop"),
+        }
+    }
+
+    #[test]
+    fn parse_packet_rejects_empty_payload() {
+        let sender = sample_hash(6);
+        let packet = build_packet(sender, b"");
+        let err = parse_relay_packet(&packet).expect_err("empty payload should be rejected");
+        assert!(err.to_string().contains("empty relay payload"));
+    }
+
+    #[test]
+    fn parse_packet_rejects_oversized_payload() {
+        let sender = sample_hash(8);
+        let payload = vec![0_u8; MAX_RELAY_PAYLOAD_BYTES + 1];
+        let packet = build_packet(sender, &payload);
+        let err = parse_relay_packet(&packet).expect_err("oversized payload should be rejected");
+        assert!(err.to_string().contains("relay payload exceeds size limit"));
+    }
+
+    #[test]
+    fn peer_rate_limiter_blocks_burst_per_peer() {
+        let mut limiter = PeerRateLimiter::new(2, RATE_LIMIT_WINDOW);
+        let peer = sample_hash(12);
+        let now = Instant::now();
+
+        assert!(limiter.allow(peer, now));
+        assert!(limiter.allow(peer, now));
+        assert!(!limiter.allow(peer, now));
+        assert!(limiter.allow(peer, now + RATE_LIMIT_WINDOW));
     }
 
     #[test]
@@ -482,5 +675,26 @@ mod tests {
         expected.sort_unstable();
 
         assert_eq!(destinations, expected);
+    }
+
+    #[test]
+    fn destination_selection_caps_fanout_after_target_lookup() {
+        let now = Instant::now();
+        let sender = sample_hash(13);
+        let mut state = RelayState::new(now);
+        for i in 0_u8..70 {
+            let peer = sample_hash(i);
+            state.register_peer(
+                peer,
+                format!("127.0.0.1:{}", 3000 + u16::from(i))
+                    .parse()
+                    .expect("addr"),
+                now,
+            );
+        }
+
+        let destinations = state.destinations_for(sender, b"no-target-hint");
+        assert_eq!(destinations.len(), 69);
+        assert!(destinations.len() > MAX_RELAY_DESTINATIONS);
     }
 }

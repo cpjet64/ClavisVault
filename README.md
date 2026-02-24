@@ -16,6 +16,7 @@ Built with extreme security and testing standards.
 ## Advanced Features
 - Vault schema v2 with key rotation metadata and migration from legacy vaults.
 - Signed export manifest v2 with checksum and signature verification on import.
+- Legacy export v1 imports now default to warning-only behavior and can be explicitly blocked in Settings (`legacyImportMode`).
 - Tamper-evident audit chain with integrity verification commands.
 - Policy-as-code validation from `policy/secret-policy.toml`.
 - Recovery drill reports (`recovery-drill`) for backup/decryptability validation.

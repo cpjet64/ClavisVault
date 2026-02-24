@@ -590,7 +590,7 @@ fn verify_jwt_signature(state: &ServerStateFile, token: &str) -> Result<JwtPaylo
     Ok(payload)
 }
 
-fn verify_token(state: &ServerStateFile, token: &str) -> Result<()> {
+fn verify_token(state: &ServerStateFile, token: &str) -> Result<JwtPayload> {
     let Some(record) = &state.token else {
         bail!("server is not paired yet");
     };
@@ -616,7 +616,14 @@ fn verify_token(state: &ServerStateFile, token: &str) -> Result<()> {
     if payload.exp != record.expires_at.timestamp() {
         bail!("token expiry mismatch");
     }
-    Ok(())
+    if payload.scp.is_empty() {
+        bail!("token missing required scopes");
+    }
+    let expected_remote = record.remote_id.as_deref().unwrap_or("");
+    if (!expected_remote.is_empty() || !payload.rid.is_empty()) && payload.rid != expected_remote {
+        bail!("token remote-id mismatch");
+    }
+    Ok(payload)
 }
 
 fn verify_token_with_scope(
@@ -625,13 +632,11 @@ fn verify_token_with_scope(
     required_scope: &str,
     remote_id: Option<&str>,
 ) -> Result<()> {
-    verify_token(state, token)?;
-    let payload = verify_jwt_signature(state, token)?;
-    if !payload.scp.is_empty() && !payload.scp.iter().any(|scope| scope == required_scope) {
+    let payload = verify_token(state, token)?;
+    if !payload.scp.iter().any(|scope| scope == required_scope) {
         bail!("token scope denied for command");
     }
     if let Some(expected_remote) = remote_id
-        && !payload.rid.is_empty()
         && payload.rid != expected_remote
     {
         bail!("token remote-id mismatch");
@@ -2089,6 +2094,106 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn verify_token_rejects_empty_scope_tokens() {
+        let mut state = ServerStateFile::default();
+        let token_record = issue_signed_jwt_token_with_policy(
+            &mut state,
+            Vec::new(),
+            Some("remote-alpha".to_string()),
+            None,
+        )
+        .expect("issue token should work");
+        state.token = Some(TokenRecord {
+            token: token_record.token,
+            expires_at: token_record.expires_at,
+            token_id: token_record.token_id,
+            scopes: token_record.scopes,
+            remote_id: token_record.remote_id,
+        });
+
+        assert!(
+            verify_token(
+                &state,
+                &state.token.clone().expect("token should exist").token
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn verify_token_with_scope_rejects_scope_mismatch() {
+        let mut state = ServerStateFile::default();
+        let token_record =
+            issue_signed_jwt_token_with_policy(&mut state, vec!["push".to_string()], None, None)
+                .expect("issue token should work");
+        state.token = Some(TokenRecord {
+            token: token_record.token,
+            expires_at: token_record.expires_at,
+            token_id: token_record.token_id,
+            scopes: token_record.scopes,
+            remote_id: token_record.remote_id,
+        });
+
+        assert!(
+            verify_token_with_scope(
+                &state,
+                &state.token.clone().expect("token should exist").token,
+                "erase",
+                None,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn verify_token_with_scope_rejects_remote_mismatch() {
+        let mut state = ServerStateFile::default();
+        let token_record = issue_signed_jwt_token_with_policy(
+            &mut state,
+            vec!["push".to_string()],
+            Some("remote-a".to_string()),
+            None,
+        )
+        .expect("issue token should work");
+        state.token = Some(TokenRecord {
+            token: token_record.token,
+            expires_at: token_record.expires_at,
+            token_id: token_record.token_id,
+            scopes: token_record.scopes,
+            remote_id: token_record.remote_id,
+        });
+
+        assert!(
+            verify_token_with_scope(
+                &state,
+                &state.token.clone().expect("token should exist").token,
+                "push",
+                Some("remote-b"),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn verify_token_rejects_revoked_jwt() {
+        let mut state = ServerStateFile::default();
+        let token_record =
+            issue_signed_jwt_token_with_policy(&mut state, vec!["push".to_string()], None, None)
+                .expect("issue token should work");
+        let issued = token_record.token.clone();
+        state.token = Some(TokenRecord {
+            token: issued.clone(),
+            expires_at: token_record.expires_at,
+            token_id: token_record.token_id.clone(),
+            scopes: token_record.scopes,
+            remote_id: token_record.remote_id,
+        });
+        state.revoked_token_ids.push(token_record.token_id);
+
+        assert!(verify_token(&state, &issued).is_err());
     }
 
     #[test]

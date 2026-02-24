@@ -32,6 +32,11 @@ export function SettingsTab({
   const [passwordChangeError, setPasswordChangeError] = useState<string | null>(null);
   const [passwordChangeSuccess, setPasswordChangeSuccess] = useState<string | null>(null);
   const [isChangingPassword, setIsChangingPassword] = useState(false);
+  const exportSignerTrustPolicy = {
+    trustedSigners: settings.exportSignerTrustPolicy?.trustedSigners ?? {},
+    legacyImportMode: settings.exportSignerTrustPolicy?.legacyImportMode ?? "warn",
+  };
+  const legacyImportMode = exportSignerTrustPolicy.legacyImportMode;
 
   const update = useCallback(
     (patch: Partial<DesktopSettings>) => {
@@ -168,6 +173,29 @@ export function SettingsTab({
               onChange={(event) => update({ wipeAfterTenFailsWarning: event.target.checked })}
             />
             Wipe warning after 10 failed attempts
+          </label>
+
+          <label className="flex flex-col gap-1 text-sm text-text/80">
+            Legacy export import mode
+            <select
+              value={legacyImportMode}
+              onChange={(event) => {
+                update({
+                  exportSignerTrustPolicy: {
+                    trustedSigners: exportSignerTrustPolicy.trustedSigners,
+                    legacyImportMode: event.target.value as "allow" | "warn" | "block",
+                  },
+                });
+              }}
+              className="rounded-lg border border-accent/20 bg-surface/70 px-3 py-2 text-text outline-none"
+            >
+              <option value="warn">Warn (default)</option>
+              <option value="allow">Allow legacy v1</option>
+              <option value="block">Block legacy v1</option>
+            </select>
+            <span className="text-xs text-text/65">
+              Use `warn` for compatibility, `block` for hardened environments.
+            </span>
           </label>
 
           <label className="flex flex-col gap-1 text-sm text-text/80">

@@ -13,6 +13,10 @@ export interface DesktopSettings {
   hardwareBackedUnlockEnabled: boolean;
   remoteSyncEnabled: boolean;
   wipeAfterTenFailsWarning: boolean;
+  exportSignerTrustPolicy: {
+    trustedSigners: Record<string, string>;
+    legacyImportMode: "allow" | "warn" | "block";
+  };
   alertAcknowledgements: Record<string, { untilVersion?: string | null; untilDate?: string | null }>;
 }
 

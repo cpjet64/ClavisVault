@@ -1,8 +1,11 @@
 #![forbid(unsafe_code)]
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::{
     collections::HashMap,
     env, fs,
+    fs::OpenOptions,
     io::{self, Write},
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
@@ -15,6 +18,8 @@ use chacha20poly1305::{
     aead::{Aead, KeyInit},
 };
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
+#[cfg(test)]
+use clavisvault_core::shell::shell_session_export_snippets;
 use clavisvault_core::{
     audit_log::{AuditIntegrityStatus, AuditLedger, verify_ledger_integrity},
     encryption::{derive_master_key, lock_vault, unlock_vault},
@@ -25,7 +30,7 @@ use clavisvault_core::{
     safe_file::{LocalSafeFileOps, SafeFileOps},
     shell::{
         SESSION_TOKEN_ENV_VAR, ShellKind, VAULT_PATH_ENV_VAR, generate_hook, shell_env_assignments,
-        shell_session_export_snippets,
+        shell_session_token_file_snippets,
     },
     types::{EncryptedVault, KeyEntry, MasterKey, VaultData},
 };
@@ -39,9 +44,10 @@ const DEFAULT_SESSION_TTL_MINUTES: i64 = 30;
 const MAX_SESSION_TTL_MINUTES: i64 = 24 * 60;
 const SESSION_TOKEN_PREFIX: &str = "clv2";
 const SESSION_TOKEN_VERSION: u8 = 2;
+const SESSION_TOKEN_FILE_PREFIX: &str = ".clavisvault-session";
 const SESSION_TOKEN_NAMESPACE: &str = "com.clavisvault.cli";
-const SESSION_TOKEN_SECRET_NAME: &str = "session-token-secret";
 const SESSION_TOKEN_RECORD_NAME: &str = "session-token-record";
+const KEYRING_MISSING: &str = "No credentials found for the given service";
 const DEFAULT_POLICY_PATH: &str = "policy/secret-policy.toml";
 const AUDIT_LEDGER_FILE_NAME: &str = "audit-ledger.json";
 
@@ -55,6 +61,17 @@ struct CliPaths {
 struct AuthOptions {
     password: Option<String>,
     session_token: Option<String>,
+    allow_legacy_session_token: bool,
+}
+
+impl AuthOptions {
+    fn new() -> Self {
+        Self {
+            password: None,
+            session_token: None,
+            allow_legacy_session_token: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -115,6 +132,16 @@ struct SessionTokenClaims {
 fn in_memory_sessions() -> &'static Mutex<HashMap<String, String>> {
     static SESSIONS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
     SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+#[cfg(test)]
+fn test_session_signing_key() -> &'static Mutex<Option<[u8; 32]>> {
+    static SESSION_SIGNING_KEY: OnceLock<Mutex<Option<[u8; 32]>>> = OnceLock::new();
+    SESSION_SIGNING_KEY.get_or_init(|| Mutex::new(None))
+}
+
+fn is_keyring_missing_error(error: &str) -> bool {
+    error == KEYRING_MISSING
 }
 
 fn main() {
@@ -222,10 +249,7 @@ fn resolve_paths(
 }
 
 fn parse_env_load_command(options: &[String]) -> Result<Command> {
-    let mut auth = AuthOptions {
-        password: None,
-        session_token: None,
-    };
+    let mut auth = AuthOptions::new();
     let mut shell: Option<ShellKind> = None;
     let mut ttl_minutes = DEFAULT_SESSION_TTL_MINUTES;
     let mut prefix = String::new();
@@ -246,6 +270,9 @@ fn parse_env_load_command(options: &[String]) -> Result<Command> {
                     bail!("missing value for --session-token");
                 }
                 auth.session_token = Some(options[i].clone());
+            }
+            "--allow-legacy-session-token" => {
+                auth.allow_legacy_session_token = true;
             }
             "--shell" => {
                 i += 1;
@@ -299,10 +326,7 @@ fn parse_env_load_command(options: &[String]) -> Result<Command> {
 }
 
 fn parse_add_key_command(options: &[String]) -> Result<Command> {
-    let mut auth = AuthOptions {
-        password: None,
-        session_token: None,
-    };
+    let mut auth = AuthOptions::new();
     let mut name: Option<String> = None;
     let mut value: Option<String> = None;
     let mut tags = Vec::new();
@@ -358,6 +382,9 @@ fn parse_add_key_command(options: &[String]) -> Result<Command> {
                 }
                 auth.session_token = Some(options[i].clone());
             }
+            "--allow-legacy-session-token" => {
+                auth.allow_legacy_session_token = true;
+            }
             other => bail!("unknown add-key option: {other}"),
         }
         i += 1;
@@ -380,10 +407,7 @@ fn parse_list_command(options: &[String]) -> Result<Command> {
 }
 
 fn parse_remove_key_command(options: &[String]) -> Result<Command> {
-    let mut auth = AuthOptions {
-        password: None,
-        session_token: None,
-    };
+    let mut auth = AuthOptions::new();
     let mut name: Option<String> = None;
 
     let mut i = 0;
@@ -410,6 +434,9 @@ fn parse_remove_key_command(options: &[String]) -> Result<Command> {
                 }
                 auth.session_token = Some(options[i].clone());
             }
+            "--allow-legacy-session-token" => {
+                auth.allow_legacy_session_token = true;
+            }
             other => bail!("unknown remove-key option: {other}"),
         }
         i += 1;
@@ -420,10 +447,7 @@ fn parse_remove_key_command(options: &[String]) -> Result<Command> {
 }
 
 fn parse_rotate_key_command(options: &[String]) -> Result<Command> {
-    let mut auth = AuthOptions {
-        password: None,
-        session_token: None,
-    };
+    let mut auth = AuthOptions::new();
     let mut name: Option<String> = None;
     let mut value: Option<String> = None;
 
@@ -458,6 +482,9 @@ fn parse_rotate_key_command(options: &[String]) -> Result<Command> {
                 }
                 auth.session_token = Some(options[i].to_string());
             }
+            "--allow-legacy-session-token" => {
+                auth.allow_legacy_session_token = true;
+            }
             other => bail!("unknown rotate-key option: {other}"),
         }
         i += 1;
@@ -472,10 +499,7 @@ fn parse_policy_command(options: &[String]) -> Result<Command> {
         bail!("policy command supports only `policy check`");
     }
 
-    let mut auth = AuthOptions {
-        password: None,
-        session_token: None,
-    };
+    let mut auth = AuthOptions::new();
     let mut policy_path: Option<PathBuf> = None;
     let mut i = 1;
     while i < options.len() {
@@ -500,6 +524,9 @@ fn parse_policy_command(options: &[String]) -> Result<Command> {
                     bail!("missing value for --session-token");
                 }
                 auth.session_token = Some(options[i].to_string());
+            }
+            "--allow-legacy-session-token" => {
+                auth.allow_legacy_session_token = true;
             }
             other => bail!("unknown policy check option: {other}"),
         }
@@ -593,10 +620,7 @@ fn parse_shell_hook_command(options: &[String]) -> Result<Command> {
 }
 
 fn parse_auth_only_options(options: &[String], command_name: &str) -> Result<AuthOptions> {
-    let mut auth = AuthOptions {
-        password: None,
-        session_token: None,
-    };
+    let mut auth = AuthOptions::new();
 
     let mut i = 0;
     while i < options.len() {
@@ -614,6 +638,9 @@ fn parse_auth_only_options(options: &[String], command_name: &str) -> Result<Aut
                     bail!("missing value for --session-token");
                 }
                 auth.session_token = Some(options[i].clone());
+            }
+            "--allow-legacy-session-token" => {
+                auth.allow_legacy_session_token = true;
             }
             other => bail!("unknown {command_name} option: {other}"),
         }
@@ -662,11 +689,12 @@ fn run_env_load(paths: CliPaths, auth: AuthOptions, options: EnvLoadOptions) -> 
     let (vault, _key) = unlock_existing_vault(&paths.vault_path, &password)?;
     let now = Utc::now();
     let session_token = build_session_token(&password, now, options.ttl_minutes)?;
+    let session_token_file = write_session_token_file(&paths.data_dir, &session_token)?;
 
     println!("# ClavisVault environment exports");
-    for assignment in shell_session_export_snippets(
+    for assignment in shell_session_token_file_snippets(
         options.shell,
-        &session_token,
+        &session_token_file.to_string_lossy(),
         &paths.vault_path.to_string_lossy(),
     ) {
         println!("{assignment}");
@@ -869,6 +897,12 @@ fn resolve_password(auth: &AuthOptions) -> Result<String> {
     }
 
     if let Some(token) = auth.session_token.as_ref() {
+        if !auth.allow_legacy_session_token {
+            bail!(
+                "use of --session-token / --token is deprecated; pass --allow-legacy-session-token to continue"
+            );
+        }
+        eprintln!("warning: using deprecated --session-token / --token; compatibility mode only");
         return parse_session_token(token, Utc::now());
     }
 
@@ -902,6 +936,48 @@ fn prompt_password() -> Result<String> {
         bail!("password is required");
     }
     Ok(password)
+}
+
+fn write_session_token_file(data_dir: &Path, token: &str) -> Result<PathBuf> {
+    fs::create_dir_all(data_dir)
+        .with_context(|| format!("failed creating {}", data_dir.display()))?;
+
+    let mut last_error = None;
+    for _ in 0..5 {
+        let path = data_dir.join(format!(
+            "{}-{}.token",
+            SESSION_TOKEN_FILE_PREFIX,
+            random_session_id()
+        ));
+        let mut file = match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(file) => file,
+            Err(err) => {
+                last_error = Some(err);
+                continue;
+            }
+        };
+
+        #[cfg(unix)]
+        {
+            let mut perms = file.metadata()?.permissions();
+            perms.set_mode(0o600);
+            file.set_permissions(perms)
+                .with_context(|| format!("failed harden permissions on {}", path.display()))?;
+        }
+
+        file.write_all(token.as_bytes())
+            .with_context(|| format!("failed writing session token file {}", path.display()))?;
+        file.sync_all()
+            .context("failed syncing session token file")?;
+
+        return Ok(path);
+    }
+
+    if let Some(err) = last_error {
+        Err(err).context("failed creating session token transport file")
+    } else {
+        bail!("failed creating session token transport file")
+    }
 }
 
 fn build_session_token(password: &str, now: DateTime<Utc>, ttl_minutes: i64) -> Result<String> {
@@ -1009,6 +1085,24 @@ fn parse_session_token(token: &str, now: DateTime<Utc>) -> Result<String> {
 }
 
 fn load_session_secret(session_id: &str) -> Result<Option<String>> {
+    #[cfg(test)]
+    {
+        if let Ok(cache) = in_memory_sessions().lock() {
+            if let Some(secret) = cache.get(session_id) {
+                return Ok(Some(secret.clone()));
+            }
+        } else {
+            bail!("failed to read in-memory session cache");
+        }
+    }
+
+    #[cfg(not(test))]
+    {
+        if in_memory_sessions().lock().is_err() {
+            bail!("failed to read in-memory session cache");
+        }
+    }
+
     if let Ok(cache) = in_memory_sessions().lock() {
         if let Some(secret) = cache.get(session_id) {
             return Ok(Some(secret.clone()));
@@ -1021,15 +1115,16 @@ fn load_session_secret(session_id: &str) -> Result<Option<String>> {
         SESSION_TOKEN_NAMESPACE,
         &format!("{SESSION_TOKEN_RECORD_NAME}-{session_id}"),
     )
-    .map_err(|_| anyhow!("keyring service unavailable"))?;
+    .map_err(|err| anyhow!("session token cache unavailable ({err})"))?;
 
     match entry.get_password() {
         Ok(secret) => Ok(Some(secret)),
         Err(err) => {
-            if err.to_string() != "No credentials found for the given service" {
-                eprintln!("warning: keyring unavailable while reading session cache ({err})");
+            if is_keyring_missing_error(&err.to_string()) {
+                Ok(None)
+            } else {
+                Err(anyhow!("session token cache read failed ({err})"))
             }
-            Ok(None)
         }
     }
 }
@@ -1042,18 +1137,23 @@ fn cache_session_secret(session_id: &str, password: &str) -> Result<()> {
         cache.insert(session_id.to_string(), password.to_string());
     }
 
-    let entry = Entry::new(
-        SESSION_TOKEN_NAMESPACE,
-        &format!("{SESSION_TOKEN_RECORD_NAME}-{session_id}"),
-    )
-    .map_err(|_| anyhow!("keyring service unavailable"))?;
-
-    if let Err(err) = entry.set_password(password) {
-        eprintln!(
-            "warning: could not persist session token in keyring ({err}); using in-memory cache only"
-        );
+    #[cfg(test)]
+    {
+        Ok(())
     }
-    Ok(())
+    #[cfg(not(test))]
+    {
+        let entry = Entry::new(
+            SESSION_TOKEN_NAMESPACE,
+            &format!("{SESSION_TOKEN_RECORD_NAME}-{session_id}"),
+        )
+        .map_err(|err| anyhow!("session token cache unavailable ({err})"))?;
+
+        entry
+            .set_password(password)
+            .map_err(|err| anyhow!("session token cache write failed ({err})"))?;
+        Ok(())
+    }
 }
 
 fn in_memory_token_secret_cell() -> &'static OnceLock<[u8; 32]> {
@@ -1061,54 +1161,70 @@ fn in_memory_token_secret_cell() -> &'static OnceLock<[u8; 32]> {
     &SESSION_SIGNING_KEY
 }
 
-fn load_or_generate_session_token_secret() -> [u8; 32] {
-    let entry = match Entry::new(SESSION_TOKEN_NAMESPACE, SESSION_TOKEN_SECRET_NAME) {
-        Ok(entry) => entry,
-        Err(err) => {
-            eprintln!(
-                "warning: failed to initialize session signing key store ({err}); using in-memory key"
-            );
-            let mut key = [0_u8; 32];
-            rand::rngs::OsRng.fill_bytes(&mut key);
-            return key;
+fn load_or_generate_session_token_secret() -> Result<[u8; 32]> {
+    #[cfg(test)]
+    {
+        let mut cell = test_session_signing_key().lock().map_err(|_| {
+            anyhow!(
+                "failed to initialize test session signing key cache; retry with a fresh process"
+            )
+        })?;
+        if let Some(key) = cell.take() {
+            return Ok(key);
         }
-    };
+        let mut key = [0_u8; 32];
+        rand::rngs::OsRng.fill_bytes(&mut key);
+        *cell = Some(key);
+        Ok(key)
+    }
 
-    match entry.get_password() {
-        Ok(encoded) => match URL_SAFE_NO_PAD.decode(encoded.as_bytes()) {
-            Ok(decoded) if decoded.len() == 32 => {
+    #[cfg(not(test))]
+    {
+        let entry = match Entry::new(SESSION_TOKEN_NAMESPACE, "session-token-secret") {
+            Ok(entry) => entry,
+            Err(err) => {
+                bail!("session signing key store unavailable ({err})");
+            }
+        };
+
+        match entry.get_password() {
+            Ok(encoded) => {
+                let decoded = URL_SAFE_NO_PAD
+                    .decode(encoded.as_bytes())
+                    .with_context(|| "failed to decode session signing key")?;
+                if decoded.len() != 32 {
+                    bail!(
+                        "session signing key has invalid length {}; remove keyring entry and retry",
+                        decoded.len()
+                    );
+                }
                 let mut key = [0_u8; 32];
                 key.copy_from_slice(&decoded);
-                return key;
+                Ok(key)
             }
-            Ok(decoded) => {
-                eprintln!(
-                    "warning: stored session signing key has invalid length {}; regenerating",
-                    decoded.len()
-                );
+            Err(err) if is_keyring_missing_error(&err.to_string()) => {
+                let mut key = [0_u8; 32];
+                rand::rngs::OsRng.fill_bytes(&mut key);
+                let encoded = URL_SAFE_NO_PAD.encode(key);
+                entry
+                    .set_password(&encoded)
+                    .map_err(|err| anyhow!("session signing key write failed ({err})"))?;
+                Ok(key)
             }
-            Err(err) => {
-                eprintln!("warning: failed to decode session signing key ({err}); regenerating");
-            }
-        },
-        Err(err) => {
-            eprintln!("warning: session signing key unavailable ({err}); generating one");
+            Err(err) => bail!("session signing key read failed ({err})"),
         }
     }
-
-    let mut key = [0_u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut key);
-    let encoded = URL_SAFE_NO_PAD.encode(key);
-    if let Err(write_err) = entry.set_password(&encoded) {
-        eprintln!(
-            "warning: could not persist session signing key ({write_err}); using in-memory key"
-        );
-    }
-    key
 }
 
 fn session_token_secret() -> Result<[u8; 32]> {
-    Ok(*in_memory_token_secret_cell().get_or_init(load_or_generate_session_token_secret))
+    if let Some(key) = in_memory_token_secret_cell().get() {
+        return Ok(*key);
+    }
+    let key = load_or_generate_session_token_secret()?;
+    match in_memory_token_secret_cell().set(key) {
+        Ok(()) => Ok(key),
+        Err(existing) => Ok(existing),
+    }
 }
 
 fn random_session_id() -> String {
@@ -1228,6 +1344,7 @@ fn print_help() {
     println!(
         "  env-load exports {VAULT_PATH_ENV_VAR} so commands can reference the active vault path"
     );
+    println!("  --allow-legacy-session-token allows deprecated plaintext --session-token input");
 }
 
 #[cfg(test)]
@@ -1523,6 +1640,7 @@ mod tests {
         let auth = AuthOptions {
             password: Some("password-123".to_string()),
             session_token: None,
+            allow_legacy_session_token: false,
         };
 
         run_add_key(
@@ -1537,5 +1655,66 @@ mod tests {
         let (vault, _) =
             unlock_existing_vault(&paths.vault_path, "password-123").expect("vault should decrypt");
         assert!(vault.keys.contains_key("OPENAI_API_KEY"));
+    }
+
+    #[test]
+    fn resolve_password_rejects_legacy_session_token_without_compat_flag() {
+        let token = build_session_token("password-123", Utc::now(), 10)
+            .expect("session token should build");
+        let err = resolve_password(&AuthOptions {
+            password: None,
+            session_token: Some(token),
+            allow_legacy_session_token: false,
+        })
+        .expect_err("legacy session token should be blocked");
+
+        assert!(
+            err.to_string().to_lowercase().contains("deprecated"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn resolve_password_accepts_legacy_session_token_when_compat_enabled() {
+        let token = build_session_token("password-123", Utc::now(), 10)
+            .expect("session token should build");
+        let password = resolve_password(&AuthOptions {
+            password: None,
+            session_token: Some(token),
+            allow_legacy_session_token: true,
+        })
+        .expect("legacy session token should work with compatibility flag");
+
+        assert_eq!(password, "password-123");
+    }
+
+    #[test]
+    fn shell_session_file_snippets_hide_session_secret() {
+        let snippets = shell_session_token_file_snippets(
+            ShellKind::Bash,
+            "/tmp/.clavisvault-session-token",
+            "/tmp/vault.cv",
+        );
+        assert_eq!(
+            snippets,
+            vec![
+                "CLAVISVAULT_SESSION_TOKEN_FILE='/tmp/.clavisvault-session-token'",
+                "export CLAVISVAULT_SESSION_TOKEN=\"$(cat $CLAVISVAULT_SESSION_TOKEN_FILE)\"",
+                "rm -f -- $CLAVISVAULT_SESSION_TOKEN_FILE",
+                "export CLAVISVAULT_VAULT_PATH='/tmp/vault.cv'",
+            ]
+        );
+    }
+
+    #[test]
+    fn write_session_token_file_has_restrictive_perms_on_unix() {
+        let paths = temp_paths("token-file-perms");
+        let token_file = write_session_token_file(&paths.data_dir, "token-value")
+            .expect("token file should write");
+        let metadata = fs::metadata(&token_file).expect("metadata should be readable");
+        #[cfg(unix)]
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+        assert!(token_file.exists());
+        assert!(metadata.file_type().is_file());
     }
 }

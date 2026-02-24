@@ -3,13 +3,25 @@ use std::io::{Cursor, Read, Write};
 use anyhow::{Context, Result, anyhow, bail};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Utc};
+
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 use zip::{AesMode, CompressionMethod, ZipArchive, ZipWriter, write::SimpleFileOptions};
 
-use crate::types::VaultData;
+use crate::types::{ExportLegacyMode, ExportSignerTrustPolicy, VaultData};
+
+const EXPORT_SIGNING_KEY_LEN: usize = 32;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExportSignerTrust {
+    Trusted,
+    Unknown,
+    Mismatch,
+    LegacyManifest,
+}
 
 const EXPORT_FORMAT_VERSION: u32 = 2;
 const LEGACY_EXPORT_FORMAT_VERSION: u32 = 1;
@@ -49,13 +61,25 @@ pub struct DecryptedExport {
 }
 
 pub fn encrypt_export(vault: &VaultData, passphrase: &str) -> Result<Vec<u8>> {
+    let mut signing_key = [0_u8; EXPORT_SIGNING_KEY_LEN];
+    rand::rngs::OsRng.fill_bytes(&mut signing_key);
+    let signing_key_hex = hex_of(&signing_key);
+    encrypt_export_with_signing_key(vault, passphrase, &signing_key_hex)
+}
+
+pub fn encrypt_export_with_signing_key(
+    vault: &VaultData,
+    passphrase: &str,
+    signing_key_hex: &str,
+) -> Result<Vec<u8>> {
     ensure_export_passphrase(passphrase)?;
+    let signing_key =
+        signing_key_from_hex(signing_key_hex).context("invalid export signing key")?;
     let payload = Zeroizing::new(
         serde_json::to_vec(vault).context("failed to serialize vault export payload")?,
     );
     let payload_sha256 = digest_hex(payload.as_slice());
     let created_at = Utc::now();
-    let signing_key = SigningKey::generate(&mut rand::rngs::OsRng);
     let signer_public_key = hex_of(signing_key.verifying_key().as_bytes());
     let signer_key_id = digest_hex(&hex_decode(&signer_public_key)?)[..16].to_string();
     let signing_input = manifest_signing_input(
@@ -209,6 +233,66 @@ fn verify_manifest_signature(manifest: &EncryptedExportManifestV2) -> Result<()>
     Ok(())
 }
 
+pub fn signer_from_private_key_hex(signing_key_hex: &str) -> Result<(String, String)> {
+    let signing_key = signing_key_from_hex(signing_key_hex)?;
+    let public_key = hex_of(signing_key.verifying_key().as_bytes());
+    let key_id = digest_hex(&hex_decode(&public_key)?)[..16].to_string();
+    Ok((key_id, public_key))
+}
+
+pub fn decrypt_export_with_policy(
+    encoded: &[u8],
+    passphrase: &str,
+    trust_policy: &ExportSignerTrustPolicy,
+) -> Result<(DecryptedExport, ExportSignerTrust)> {
+    let export = decrypt_export_with_metadata(encoded, passphrase)?;
+    let trust = evaluate_export_signer_trust(&export.metadata, trust_policy)?;
+    Ok((export, trust))
+}
+
+pub fn evaluate_export_signer_trust(
+    metadata: &DecryptedExportMetadata,
+    trust_policy: &ExportSignerTrustPolicy,
+) -> Result<ExportSignerTrust> {
+    if metadata.legacy_manifest {
+        return Ok(ExportSignerTrust::LegacyManifest);
+    }
+
+    let signer_key_id = metadata
+        .signer_key_id
+        .as_deref()
+        .ok_or_else(|| anyhow!("export manifest missing signer_key_id"))?;
+    let signer_public_key = metadata
+        .signer_public_key
+        .as_deref()
+        .ok_or_else(|| anyhow!("export manifest missing signer_public_key"))?;
+
+    if trust_policy.is_signer_trusted(signer_key_id, signer_public_key) {
+        return Ok(ExportSignerTrust::Trusted);
+    }
+
+    match trust_policy.trusted_signers.get(signer_key_id) {
+        Some(existing_public_key) if existing_public_key != signer_public_key => {
+            Ok(ExportSignerTrust::Mismatch)
+        }
+        _ => Ok(ExportSignerTrust::Unknown),
+    }
+}
+
+pub fn enforce_export_legacy_import_policy(
+    metadata: &DecryptedExportMetadata,
+    trust_policy: &ExportSignerTrustPolicy,
+) -> Result<bool> {
+    if !metadata.legacy_manifest {
+        return Ok(false);
+    }
+    match trust_policy.legacy_import_mode {
+        ExportLegacyMode::Block => bail!("legacy export manifest format is blocked by policy"),
+        ExportLegacyMode::Allow => Ok(true),
+        ExportLegacyMode::Warn => Ok(false),
+    }
+}
+
 fn manifest_signing_input(
     version: u32,
     created_at: DateTime<Utc>,
@@ -252,6 +336,15 @@ fn hex_decode(value: &str) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+fn signing_key_from_hex(signing_key_hex: &str) -> Result<SigningKey> {
+    let bytes = hex_decode(signing_key_hex)?;
+    let bytes: [u8; EXPORT_SIGNING_KEY_LEN] = bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| anyhow!("invalid export signing key length"))?;
+    Ok(SigningKey::from_bytes(&bytes))
+}
+
 fn ensure_export_passphrase(passphrase: &str) -> Result<()> {
     if passphrase.trim().is_empty() {
         return Err(anyhow!("export passphrase must not be empty"));
@@ -265,7 +358,7 @@ mod tests {
     use chrono::Utc;
 
     use super::*;
-    use crate::types::{KeyEntry, VaultData};
+    use crate::types::{ExportLegacyMode, ExportSignerTrustPolicy, KeyEntry, VaultData};
 
     #[test]
     fn encrypted_export_round_trip() {
@@ -310,5 +403,272 @@ mod tests {
     fn encrypt_export_rejects_empty_passphrase() {
         let vault = VaultData::new([1; 16]);
         assert!(encrypt_export(&vault, "   ").is_err());
+    }
+
+    #[test]
+    fn encrypt_export_signing_key_is_reused_for_signer_identity() {
+        let vault = VaultData::new([9; 16]);
+        let signing_key = hex_of(&{
+            let mut bytes = [0_u8; EXPORT_SIGNING_KEY_LEN];
+            bytes[0] = 9;
+            bytes[7] = 1;
+            bytes
+        });
+        let encoded = encrypt_export_with_signing_key(&vault, "export-passphrase", &signing_key)
+            .expect("export with explicit signing key should work");
+        let decoded = decrypt_export_with_metadata(&encoded, "export-passphrase")
+            .expect("signed export should parse");
+        let (signer_key_id, signer_public_key) =
+            signer_from_private_key_hex(&signing_key).expect("signer id should decode from key");
+
+        assert_eq!(
+            decoded.metadata.signer_key_id.as_deref(),
+            Some(signer_key_id.as_str())
+        );
+        assert_eq!(
+            decoded.metadata.signer_public_key.as_deref(),
+            Some(signer_public_key.as_str())
+        );
+    }
+
+    #[test]
+    fn decrypt_export_with_trust_flags_unknown_signer() {
+        let vault = VaultData::new([10; 16]);
+        let signing_key = hex_of(&{
+            let mut bytes = [0_u8; EXPORT_SIGNING_KEY_LEN];
+            bytes[0] = 1;
+            bytes[4] = 2;
+            bytes
+        });
+        let encoded = encrypt_export_with_signing_key(&vault, "export-passphrase", &signing_key)
+            .expect("export should write");
+        let (decoded, trust) = decrypt_export_with_policy(
+            &encoded,
+            "export-passphrase",
+            &ExportSignerTrustPolicy::default(),
+        )
+        .expect("decrypt policy path should work");
+        assert!(decoded.metadata.signer_public_key.is_some());
+        assert_eq!(trust, ExportSignerTrust::Unknown);
+    }
+
+    #[test]
+    fn decrypt_export_with_trust_flags_tofu_match_after_recorded_key() {
+        let vault = VaultData::new([11; 16]);
+        let signing_key = hex_of(&{
+            let mut bytes = [0_u8; EXPORT_SIGNING_KEY_LEN];
+            bytes[0] = 5;
+            bytes
+        });
+        let encoded = encrypt_export_with_signing_key(&vault, "export-passphrase", &signing_key)
+            .expect("export should write");
+        let mut policy = ExportSignerTrustPolicy::default();
+        let (key_id, public_key) =
+            signer_from_private_key_hex(&signing_key).expect("signer metadata should extract");
+        policy.record_trusted_signer(key_id.clone(), public_key.clone());
+
+        let (decoded, trust) = decrypt_export_with_policy(&encoded, "export-passphrase", &policy)
+            .expect("decrypt policy path should parse");
+        assert_eq!(decoded.metadata.signer_key_id, Some(key_id));
+        assert_eq!(decoded.metadata.signer_public_key, Some(public_key));
+        assert_eq!(trust, ExportSignerTrust::Trusted);
+    }
+
+    #[test]
+    fn decrypt_export_trust_flags_mismatch_for_same_key_id() {
+        let vault = VaultData::new([12; 16]);
+        let key_a = hex_of(&{
+            let mut bytes = [0_u8; EXPORT_SIGNING_KEY_LEN];
+            bytes[0] = 3;
+            bytes
+        });
+        let key_b = hex_of(&{
+            let mut bytes = [0_u8; EXPORT_SIGNING_KEY_LEN];
+            bytes[1] = 3;
+            bytes
+        });
+        let encoded = encrypt_export_with_signing_key(&vault, "export-passphrase", &key_a)
+            .expect("export should write");
+
+        let (key_id_a, public_key_a) = signer_from_private_key_hex(&key_a).unwrap();
+        let (key_id_b, _public_key_b) = signer_from_private_key_hex(&key_b).unwrap();
+        assert_ne!(key_id_a, key_id_b);
+
+        let mut policy = ExportSignerTrustPolicy::default();
+        policy.record_trusted_signer(key_id_b, public_key_a);
+        let (_, trust) =
+            decrypt_export_with_policy(&encoded, "export-passphrase", &policy).unwrap();
+        assert_eq!(trust, ExportSignerTrust::Unknown);
+    }
+
+    #[test]
+    fn legacy_import_respects_policy() {
+        let vault = VaultData::new([13; 16]);
+        let policy = ExportSignerTrustPolicy {
+            legacy_import_mode: ExportLegacyMode::Warn,
+            ..ExportSignerTrustPolicy::default()
+        };
+        let encoded = {
+            let payload = serde_json::to_vec(&vault).expect("serialize");
+            let created_at = Utc::now();
+            let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+            let passphrase_owned = Zeroizing::new("export-passphrase".to_string());
+            let options = SimpleFileOptions::default()
+                .compression_method(CompressionMethod::Deflated)
+                .with_aes_encryption(AesMode::Aes256, passphrase_owned.as_str());
+            writer
+                .start_file(EXPORT_MANIFEST_PATH, options)
+                .expect("start manifest");
+            writer
+                .write_all(
+                    format!(
+                        "{{\"version\":1,\"created_at\":\"{}\"}}",
+                        created_at.to_rfc3339()
+                    )
+                    .as_bytes(),
+                )
+                .expect("manifest write");
+            writer
+                .start_file(EXPORT_PAYLOAD_PATH, options)
+                .expect("start payload");
+            writer.write_all(&payload).expect("payload write");
+            writer.finish().expect("finish zip").into_inner()
+        };
+        let decoded = decrypt_export_with_metadata(&encoded, "export-passphrase")
+            .expect("legacy decode should work");
+        assert!(decoded.metadata.legacy_manifest);
+        assert!(!enforce_export_legacy_import_policy(&decoded.metadata, &policy).unwrap());
+
+        let block_mode = ExportSignerTrustPolicy {
+            legacy_import_mode: ExportLegacyMode::Block,
+            ..ExportSignerTrustPolicy::default()
+        };
+        assert!(enforce_export_legacy_import_policy(&decoded.metadata, &block_mode).is_err());
+    }
+
+    #[test]
+    fn tampered_signature_rejects_import() {
+        let vault = VaultData::new([14; 16]);
+        let encoded = encrypt_export(&vault, "export-passphrase").expect("export should work");
+        let mut archive = ZipArchive::new(Cursor::new(encoded.clone())).expect("archive parse");
+        let mut manifest_json = Vec::new();
+        archive
+            .by_name_decrypt(EXPORT_MANIFEST_PATH, "export-passphrase".as_bytes())
+            .expect("manifest open")
+            .read_to_end(&mut manifest_json)
+            .expect("read manifest");
+        let mut manifest: EncryptedExportManifestV2 =
+            serde_json::from_slice(&manifest_json).expect("manifest decode");
+        manifest.signature.push('A');
+        let passphrase_owned = Zeroizing::new("export-passphrase".to_string());
+        let options = SimpleFileOptions::default()
+            .compression_method(CompressionMethod::Deflated)
+            .with_aes_encryption(AesMode::Aes256, passphrase_owned.as_str());
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        writer
+            .start_file(EXPORT_MANIFEST_PATH, options)
+            .expect("start manifest");
+        writer
+            .write_all(&serde_json::to_vec(&manifest).expect("serialize manifest"))
+            .expect("write manifest");
+        let mut payload = Vec::new();
+        let mut archive = ZipArchive::new(Cursor::new(encoded)).expect("parse archive");
+        archive
+            .by_name_decrypt(EXPORT_PAYLOAD_PATH, "export-passphrase".as_bytes())
+            .expect("read payload")
+            .read_to_end(&mut payload)
+            .expect("payload read");
+        writer
+            .start_file(EXPORT_PAYLOAD_PATH, options)
+            .expect("start payload");
+        writer.write_all(&payload).expect("write payload");
+
+        let rewritten = writer.finish().expect("finish");
+        assert!(decrypt_export(&rewritten.into_inner(), "export-passphrase").is_err());
+    }
+
+    #[test]
+    fn tampered_payload_sha256_rejects_import() {
+        let vault = VaultData::new([15; 16]);
+        let encoded = encrypt_export(&vault, "export-passphrase").expect("export should write");
+        let mut archive = ZipArchive::new(Cursor::new(encoded.clone())).expect("parse archive");
+        let mut payload = Vec::new();
+        archive
+            .by_name_decrypt(EXPORT_PAYLOAD_PATH, "export-passphrase".as_bytes())
+            .expect("read payload")
+            .read_to_end(&mut payload)
+            .expect("payload read");
+        payload.push(0xff);
+
+        let options = SimpleFileOptions::default()
+            .compression_method(CompressionMethod::Deflated)
+            .with_aes_encryption(AesMode::Aes256, "export-passphrase");
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        let mut manifest_file = archive
+            .by_name_decrypt(EXPORT_MANIFEST_PATH, "export-passphrase".as_bytes())
+            .expect("read manifest");
+        let mut manifest_json = Vec::new();
+        manifest_file
+            .read_to_end(&mut manifest_json)
+            .expect("read manifest");
+        writer
+            .start_file(EXPORT_MANIFEST_PATH, options)
+            .expect("start manifest");
+        writer.write_all(&manifest_json).expect("write manifest");
+        writer
+            .start_file(EXPORT_PAYLOAD_PATH, options)
+            .expect("start payload");
+        writer.write_all(&payload).expect("write payload");
+        let rewritten = writer.finish().expect("finish");
+
+        assert!(decrypt_export(&rewritten.into_inner(), "export-passphrase").is_err());
+    }
+
+    #[test]
+    fn export_signer_import_rotation_supports_to_fu_update() {
+        let mut vault = VaultData::new([16; 16]);
+        vault.keys.insert(
+            "ROTATE".to_string(),
+            KeyEntry {
+                name: "ROTATE".to_string(),
+                description: "rotation".to_string(),
+                secret: None,
+                tags: vec!["ci".to_string()],
+                last_updated: Utc::now(),
+                created_at: Utc::now(),
+                expires_at: None,
+                rotation_period_days: None,
+                warn_before_days: None,
+                last_rotated_at: Some(Utc::now()),
+                owner: Some("ci".to_string()),
+            },
+        );
+
+        let mut policy = ExportSignerTrustPolicy::default();
+        let key_a = hex_of(&[1_u8; EXPORT_SIGNING_KEY_LEN]);
+        let key_b = hex_of(&[2_u8; EXPORT_SIGNING_KEY_LEN]);
+        let (id_a, pub_a) = signer_from_private_key_hex(&key_a).expect("first signer");
+        policy.record_trusted_signer(id_a.clone(), pub_a.clone());
+        let encoded =
+            encrypt_export_with_signing_key(&vault, "export-passphrase", &key_a).expect("export");
+        let (_decoded, trust_a) =
+            decrypt_export_with_policy(&encoded, "export-passphrase", &policy)
+                .expect("policy check");
+        assert_eq!(trust_a, ExportSignerTrust::Trusted);
+
+        let (id_b, pub_b) = signer_from_private_key_hex(&key_b).expect("second signer");
+        assert_ne!(id_a, id_b);
+        policy.record_trusted_signer(id_b.clone(), pub_b);
+
+        let encoded_b =
+            encrypt_export_with_signing_key(&vault, "export-passphrase", &key_b).expect("export");
+        let (decoded_b, trust_b) =
+            decrypt_export_with_policy(&encoded_b, "export-passphrase", &policy)
+                .expect("policy check");
+        assert_eq!(
+            decoded_b.metadata.signer_key_id.as_deref(),
+            Some(id_b.as_str())
+        );
+        assert_eq!(trust_b, ExportSignerTrust::Trusted);
     }
 }

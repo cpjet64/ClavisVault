@@ -24,7 +24,10 @@ use clavisvault_core::{
     agents_updater::AgentsUpdater,
     audit_log::{AuditEntry, AuditIntegrityStatus, AuditLog, AuditOperation, IdleLockTimer},
     encryption::{PasswordAttemptLimiter, derive_master_key, lock_vault, unlock_vault},
-    export::{decrypt_export_with_metadata, encrypt_export},
+    export::{
+        ExportSignerTrust, decrypt_export_with_policy, encrypt_export,
+        enforce_export_legacy_import_policy,
+    },
     openclaw::OpenClawUpdater,
     platform::{Platform, current_platform_config_dir, current_platform_data_dir},
     policy::{load_policy, validate_vault_policy},
@@ -36,7 +39,7 @@ use clavisvault_core::{
     },
     safe_file::{LocalSafeFileOps, SafeFileOps},
     shell::generate_all_hooks,
-    types::{EncryptedVault, KeyEntry, MasterKey, VaultData},
+    types::{EncryptedVault, ExportSignerTrustPolicy, KeyEntry, MasterKey, VaultData},
 };
 #[cfg(not(test))]
 use keyring::Entry;
@@ -133,6 +136,8 @@ struct DesktopSettings {
     wipe_after_ten_fails_warning: bool,
     #[serde(default)]
     alert_acknowledgements: HashMap<String, AlertAcknowledgement>,
+    #[serde(default)]
+    export_signer_trust_policy: ExportSignerTrustPolicy,
     remotes: Vec<RemoteServer>,
 }
 
@@ -153,21 +158,21 @@ fn remote_client_fingerprint_from_private(private_key: &[u8; 32]) -> String {
 }
 
 fn remote_client_private_key_from_hex(hex_value: &str) -> Option<[u8; 32]> {
-    let bytes = hex_decode(hex_value).ok()?;
-    match bytes.len() {
-        32 => {
-            let mut private_key = [0_u8; 32];
-            private_key.copy_from_slice(&bytes);
-            Some(private_key)
-        }
-        0 => None,
-        _ => {
-            let digest = Sha256::digest(&bytes);
-            let mut private_key = [0_u8; 32];
-            private_key.copy_from_slice(&digest);
-            Some(private_key)
-        }
+    let trimmed = hex_value.trim();
+    if trimmed.is_empty() {
+        return None;
     }
+    if trimmed.len() != 64 {
+        return None;
+    }
+    let bytes = hex_decode(trimmed).ok()?;
+    if bytes.len() != 32 {
+        return None;
+    }
+
+    let mut private_key = [0_u8; 32];
+    private_key.copy_from_slice(&bytes);
+    Some(private_key)
 }
 
 #[cfg(test)]
@@ -243,10 +248,6 @@ fn delete_keyring_secret(name: &str) -> Result<()> {
     }
 }
 
-fn store_remote_client_private_key(private_key: &str) {
-    let _ = write_keyring_secret(REMOTE_CLIENT_PRIVATE_KEY_RECORD, private_key);
-}
-
 fn load_remote_client_private_key() -> Option<String> {
     read_keyring_secret(REMOTE_CLIENT_PRIVATE_KEY_RECORD)
         .ok()
@@ -295,41 +296,67 @@ fn remote_session_token(remote: &RemoteServer) -> Option<String> {
         .or_else(|| load_remote_session_token(&remote.id))
 }
 
-fn migrate_remote_client_private_key(settings: &mut DesktopSettings) {
-    if let Some(cached) = load_remote_client_private_key() {
-        settings.remote_client_private_key = Some(cached);
+fn migrate_remote_client_private_key(settings: &mut DesktopSettings) -> Result<()> {
+    let legacy_private_key = settings.remote_client_private_key.take();
+
+    if legacy_private_key.is_none() {
+        if let Some(cached) = load_remote_client_private_key() {
+            remote_client_private_key_from_hex(&cached)
+                .ok_or_else(|| anyhow!("invalid cached remote client private key in keyring"))?;
+        }
+        return Ok(());
     }
-    resolve_remote_client_identity(settings);
-    if let Some(private_key) = settings.remote_client_private_key.as_deref() {
-        store_remote_client_private_key(private_key);
+
+    if let Some(raw_private_key) = legacy_private_key {
+        let private_key = remote_client_private_key_from_hex(&raw_private_key)
+            .ok_or_else(|| anyhow!("invalid remote client private key in settings"))?;
+        let canonical_private_key = hex_of(private_key.as_ref());
+        write_keyring_secret(REMOTE_CLIENT_PRIVATE_KEY_RECORD, &canonical_private_key)?;
+        settings.remote_client_private_key = None;
     }
+
+    Ok(())
 }
 
-fn migrate_remote_session_tokens(remotes: &mut [RemoteServer]) {
+fn migrate_remote_session_tokens(remotes: &mut [RemoteServer]) -> Result<()> {
     for remote in remotes {
-        if let Some(token) = remote.session_token.as_deref() {
-            store_remote_session_token(&remote.id, token);
+        if let Some(token) = remote.session_token.take() {
+            if remote.id.trim().is_empty() {
+                return Err(anyhow!(
+                    "remote id is required to migrate legacy remote session token"
+                ));
+            }
+            store_remote_session_token(&remote.id, &token);
         }
     }
+    Ok(())
 }
 
-fn has_plaintext_remote_secrets(settings: &DesktopSettings) -> bool {
-    settings.remote_client_private_key.is_some()
-        || settings
-            .remotes
-            .iter()
-            .any(|remote| remote.session_token.is_some())
+fn has_plaintext_remote_session_tokens(settings: &DesktopSettings) -> bool {
+    settings
+        .remotes
+        .iter()
+        .any(|remote| remote.session_token.is_some())
 }
 
-fn resolve_remote_client_identity(settings: &mut DesktopSettings) {
-    let private_key = settings
-        .remote_client_private_key
-        .as_deref()
-        .and_then(remote_client_private_key_from_hex)
-        .or_else(|| remote_client_private_key_from_hex(&settings.remote_client_fingerprint))
-        .unwrap_or_else(random_remote_client_private_key_bytes);
+fn resolve_remote_client_identity(settings: &mut DesktopSettings) -> Result<()> {
+    let private_key = if let Some(raw_private_key) = settings.remote_client_private_key.as_deref() {
+        Some(
+            remote_client_private_key_from_hex(raw_private_key)
+                .ok_or_else(|| anyhow!("invalid remote client private key in settings"))?,
+        )
+    } else if let Some(raw_private_key) = load_remote_client_private_key() {
+        Some(
+            remote_client_private_key_from_hex(&raw_private_key)
+                .ok_or_else(|| anyhow!("invalid remote client private key in keyring"))?,
+        )
+    } else {
+        None
+    };
+    let private_key = private_key.unwrap_or_else(random_remote_client_private_key_bytes);
     settings.remote_client_private_key = Some(hex_of(private_key.as_slice()));
     settings.remote_client_fingerprint = remote_client_fingerprint_from_private(&private_key);
+    Ok(())
 }
 
 fn remote_client_private_key_bytes(settings: &DesktopSettings) -> Result<[u8; 32]> {
@@ -340,9 +367,10 @@ fn remote_client_private_key_bytes(settings: &DesktopSettings) -> Result<[u8; 32
         .or_else(|| {
             load_remote_client_private_key()
                 .and_then(|value| remote_client_private_key_from_hex(&value))
-        })
-        .or_else(|| remote_client_private_key_from_hex(&settings.remote_client_fingerprint))
-        .ok_or_else(|| anyhow!("invalid remote client identity in settings"))?;
+        });
+    let Some(private_key) = private_key else {
+        bail!("invalid remote client identity in settings");
+    };
     Ok(private_key)
 }
 
@@ -364,10 +392,13 @@ impl Default for DesktopSettings {
             remote_client_private_key: Some(random_remote_client_private_key()),
             wipe_after_ten_fails_warning: true,
             alert_acknowledgements: HashMap::new(),
+            export_signer_trust_policy: ExportSignerTrustPolicy::default(),
             remotes: Vec::new(),
         };
 
-        resolve_remote_client_identity(&mut settings);
+        if let Err(err) = resolve_remote_client_identity(&mut settings) {
+            panic!("failed to initialize default remote client identity: {err}");
+        }
         settings
     }
 }
@@ -615,9 +646,9 @@ impl DesktopState {
 
         let settings_path = config_dir.join(SETTINGS_FILE_NAME);
         let loaded_settings = load_settings(&settings_path)?;
-        let had_plaintext_secrets = has_plaintext_remote_secrets(&loaded_settings);
-        let settings = ensure_settings_defaults(loaded_settings.clone());
-        if settings != loaded_settings || had_plaintext_secrets {
+        let had_plaintext_session_tokens = has_plaintext_remote_session_tokens(&loaded_settings);
+        let settings = ensure_settings_defaults(loaded_settings.clone())?;
+        if settings != loaded_settings || had_plaintext_session_tokens {
             persist_settings_record(&settings_path, &settings)?;
         }
         let vault_path = data_dir.join(VAULT_FILE_NAME);
@@ -1025,14 +1056,66 @@ fn import_vault(
     enforce_idle_lock(&mut inner.vault);
 
     let bytes = fs::read(&input_path).map_err(err_to_string)?;
-    let imported = decrypt_export_with_metadata(&bytes, &passphrase).map_err(err_to_string)?;
+    let (imported, trust) = {
+        let trust_policy = inner.settings.export_signer_trust_policy.clone();
+        decrypt_export_with_policy(&bytes, &passphrase, &trust_policy).map_err(err_to_string)?
+    };
+
     if imported.metadata.legacy_manifest {
+        let legacy_allowed = enforce_export_legacy_import_policy(
+            &imported.metadata,
+            &inner.settings.export_signer_trust_policy,
+        )
+        .map_err(err_to_string)?;
         inner.vault.audit.record(
             AuditOperation::FileUpdate,
             None,
-            "imported legacy export manifest v1",
+            if legacy_allowed {
+                "imported legacy export manifest v1 (allowed by policy)"
+            } else {
+                "imported legacy export manifest v1 (warn mode)"
+            },
         );
     }
+
+    match trust {
+        ExportSignerTrust::Trusted => {
+            inner.vault.audit.record(
+                AuditOperation::FileUpdate,
+                None,
+                "imported encrypted export from trusted signer",
+            );
+        }
+        ExportSignerTrust::Unknown => {
+            let signer_key_id = imported
+                .metadata
+                .signer_key_id
+                .clone()
+                .ok_or_else(|| "export signer key id missing".to_string())?;
+            let signer_public_key = imported
+                .metadata
+                .signer_public_key
+                .clone()
+                .ok_or_else(|| "export signer public key missing".to_string())?;
+
+            inner
+                .settings
+                .export_signer_trust_policy
+                .record_trusted_signer(signer_key_id, signer_public_key);
+            persist_settings_record(&inner.settings_path, &inner.settings)
+                .map_err(err_to_string)?;
+            inner.vault.audit.record(
+                AuditOperation::FileUpdate,
+                None,
+                "imported encrypted export from unknown signer and added TOFU trust",
+            );
+        }
+        ExportSignerTrust::Mismatch => {
+            bail!("export signer mismatch for trusted key id");
+        }
+        ExportSignerTrust::LegacyManifest => {}
+    }
+
     let key = inner
         .vault
         .master_key
@@ -1189,13 +1272,21 @@ fn remote_endpoint_for_request(
     Ok((socket_addr, server_name))
 }
 
-fn ensure_settings_defaults(mut settings: DesktopSettings) -> DesktopSettings {
-    migrate_remote_client_private_key(&mut settings);
-    migrate_remote_session_tokens(&mut settings.remotes);
-    resolve_remote_client_identity(&mut settings);
+fn ensure_settings_defaults(mut settings: DesktopSettings) -> Result<DesktopSettings> {
+    migrate_remote_client_private_key(&mut settings)?;
+    migrate_remote_session_tokens(&mut settings.remotes)?;
+    if settings
+        .remotes
+        .iter()
+        .any(|remote| remote.session_token.is_some())
+    {
+        bail!("legacy plaintext remote session token detected during settings normalization");
+    }
+    resolve_remote_client_identity(&mut settings)?;
     if settings.remotes.is_empty() {
         settings.remotes = Vec::new();
     }
+
     for remote in &mut settings.remotes {
         if remote.permissions.trim().is_empty() {
             remote.permissions = "full".to_string();
@@ -1219,7 +1310,7 @@ fn ensure_settings_defaults(mut settings: DesktopSettings) -> DesktopSettings {
         }
     }
 
-    settings
+    Ok(settings)
 }
 
 fn remote_payload_to_hex(payload: &[u8]) -> String {
@@ -1749,9 +1840,7 @@ fn save_settings(
     if settings.remote_client_private_key.is_none() {
         settings.remote_client_private_key = inner.settings.remote_client_private_key.clone();
     }
-    migrate_remote_client_private_key(&mut settings);
-    migrate_remote_session_tokens(&mut settings.remotes);
-    resolve_remote_client_identity(&mut settings);
+    settings = ensure_settings_defaults(settings).map_err(err_to_string)?;
     settings.remotes = inner.settings.remotes.clone();
     apply_autostart(settings.launch_on_startup, settings.launch_minimized)
         .map_err(err_to_string)?;
@@ -3478,7 +3567,8 @@ message: "Optional update"
             ..DesktopSettings::default()
         };
 
-        let normalized = ensure_settings_defaults(settings.clone());
+        let normalized = ensure_settings_defaults(settings.clone())
+            .expect("settings defaults should normalize legacy secrets");
         let rendered = serde_json::to_string(&normalized).expect("settings should serialize");
 
         assert!(!rendered.contains("remoteClientPrivateKey"));
@@ -3488,6 +3578,45 @@ message: "Optional update"
             load_remote_session_token(&remote_id),
             Some("token-from-legacy-settings".to_string())
         );
+        assert_eq!(
+            normalized
+                .remotes
+                .first()
+                .and_then(|remote| remote.session_token.clone()),
+            None
+        );
+        assert!(
+            !normalized
+                .remotes
+                .first()
+                .is_none_or(|remote| remote.session_token.is_some())
+        );
+    }
+
+    #[test]
+    fn legacy_remote_session_token_requires_remote_id_for_migration() {
+        test_keyring_store().lock().unwrap().clear();
+        let settings = DesktopSettings {
+            remote_client_private_key: None,
+            remotes: vec![RemoteServer {
+                id: String::new(),
+                name: "remote".to_string(),
+                endpoint: "127.0.0.1:51821".to_string(),
+                permissions: "full".to_string(),
+                session_ttl_seconds: 86_400,
+                revoked_at: None,
+                requires_repairing: false,
+                pairing_code: None,
+                relay_fingerprint: None,
+                server_fingerprint: None,
+                session_token: Some("token".to_string()),
+                key_count: 0,
+                last_sync: None,
+            }],
+            ..DesktopSettings::default()
+        };
+
+        assert!(ensure_settings_defaults(settings).is_err());
     }
 
     #[test]
@@ -3563,7 +3692,7 @@ message: "Optional update"
             .remote_client_private_key
             .clone()
             .expect("private key set");
-        resolve_remote_client_identity(&mut settings);
+        resolve_remote_client_identity(&mut settings).expect("valid private key should resolve");
         assert_eq!(
             settings.remote_client_private_key.as_deref(),
             Some(expected_private.as_str())
@@ -3576,23 +3705,25 @@ message: "Optional update"
     }
 
     #[test]
-    fn remote_identity_migrates_from_legacy_fingerprint_seed() {
+    fn remote_identity_rejects_invalid_legacy_private_seed() {
         let legacy_seed = "00112233445566778899aabbccddeeff00";
-        let mut settings = DesktopSettings {
-            remote_client_private_key: None,
-            remote_client_fingerprint: legacy_seed.to_string(),
+        let settings = DesktopSettings {
+            remote_client_private_key: Some(legacy_seed.to_string()),
             ..DesktopSettings::default()
         };
 
-        resolve_remote_client_identity(&mut settings);
+        assert!(remote_client_private_key_from_hex(legacy_seed).is_none());
+        assert!(ensure_settings_defaults(settings).is_err());
+    }
 
-        let migrated_private = remote_client_private_key_from_hex(legacy_seed)
-            .expect("legacy seed should map to private key");
-        assert_eq!(migrated_private.len(), 32);
-        assert_eq!(
-            settings.remote_client_private_key,
-            Some(hex_of(&migrated_private)),
-            "legacy fingerprint seed should become deterministic private key"
-        );
+    #[test]
+    fn remote_client_private_key_from_hex_rejects_wrong_length() {
+        assert_eq!(remote_client_private_key_from_hex(&"0".repeat(63)), None);
+        assert_eq!(remote_client_private_key_from_hex(&"0".repeat(65)), None);
+    }
+
+    #[test]
+    fn remote_client_private_key_from_hex_rejects_non_hex() {
+        assert_eq!(remote_client_private_key_from_hex(&"zz".repeat(32)), None);
     }
 }

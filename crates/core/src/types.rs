@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
 
 pub const VAULT_VERSION: u32 = 2;
+pub const DEFAULT_AUDIT_LOG_MAX_AGE_DAYS: i64 = 90;
 
 fn default_created_at() -> DateTime<Utc> {
     Utc.timestamp_opt(0, 0).single().unwrap_or_else(Utc::now)
@@ -63,6 +64,61 @@ impl Drop for KeyEntry {
         if let Some(secret) = self.secret.as_mut() {
             secret.zeroize();
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum ExportLegacyMode {
+    Allow,
+    #[default]
+    Warn,
+    #[serde(rename = "block")]
+    Block,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportSignerTrustPolicy {
+    #[serde(default)]
+    pub trusted_signers: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    pub legacy_import_mode: ExportLegacyMode,
+}
+
+impl ExportSignerTrustPolicy {
+    pub fn is_signer_trusted(&self, signer_key_id: &str, signer_public_key: &str) -> bool {
+        self.trusted_signers
+            .get(signer_key_id)
+            .is_some_and(|public_key| public_key == signer_public_key)
+    }
+
+    pub fn allow_legacy_import(&self) -> bool {
+        matches!(self.legacy_import_mode, ExportLegacyMode::Allow)
+    }
+
+    pub fn warn_legacy_import(&self) -> bool {
+        matches!(self.legacy_import_mode, ExportLegacyMode::Warn)
+    }
+
+    pub fn record_trusted_signer(&mut self, signer_key_id: String, signer_public_key: String) {
+        self.trusted_signers
+            .insert(signer_key_id, signer_public_key);
+    }
+
+    pub fn signer_matches_existing_key(
+        &self,
+        signer_key_id: &str,
+        signer_public_key: &str,
+    ) -> bool {
+        match self.trusted_signers.get(signer_key_id) {
+            Some(existing_public_key) => existing_public_key == signer_public_key,
+            None => false,
+        }
+    }
+
+    pub fn remove_unknown_signer(&mut self, signer_key_id: &str) {
+        self.trusted_signers.remove(signer_key_id);
     }
 }
 
