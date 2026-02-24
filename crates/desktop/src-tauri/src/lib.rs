@@ -2677,7 +2677,7 @@ fn version_leq(current: &str, until: &str) -> bool {
                     return true;
                 }
             }
-            _ => return current <= until,
+            _ => return false,
         }
     }
 }
@@ -3010,6 +3010,13 @@ message: "Optional update"
         assert!(version_leq("1.0.0", "1"));
         assert!(!version_leq("1.0.1", "1"));
         assert!(version_leq("1.2", "1.2.0"));
+    }
+
+    #[test]
+    fn version_leq_rejects_non_numeric_segments() {
+        assert!(!version_leq("1.2.3", "1.2.3-beta"));
+        assert!(!version_leq("v1.2.3", "1.2.3"));
+        assert!(!version_leq("1.2.alpha", "1.2.9"));
     }
 
     #[test]

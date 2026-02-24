@@ -24,6 +24,8 @@
 - Synced `masterplan.md` matrix with that SPEC alignment fix and code evidence.
 - Corrected `docs/SPEC.md` location wording to consistently document `docs/alerts.md` and root `CHANGELOG.md`.
 - Added explicit “Unimplemented requirement register” section to `masterplan.md` (currently empty / none identified).
+- Hardened alert version acknowledgement comparison fallback to fail-closed on non-numeric version segments.
+- Added regression test `version_leq_rejects_non_numeric_segments`.
 
 ## Decisions Needed
 - None.
