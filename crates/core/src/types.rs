@@ -1,10 +1,14 @@
 use std::{collections::HashMap, path::PathBuf};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
 
-pub const VAULT_VERSION: u32 = 1;
+pub const VAULT_VERSION: u32 = 2;
+
+fn default_created_at() -> DateTime<Utc> {
+    Utc.timestamp_opt(0, 0).single().unwrap_or_else(Utc::now)
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct KeyEntry {
@@ -12,6 +16,18 @@ pub struct KeyEntry {
     pub description: String,
     pub tags: Vec<String>,
     pub last_updated: DateTime<Utc>,
+    #[serde(default = "default_created_at")]
+    pub created_at: DateTime<Utc>,
+    #[serde(default)]
+    pub expires_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub rotation_period_days: Option<u32>,
+    #[serde(default)]
+    pub warn_before_days: Option<u32>,
+    #[serde(default)]
+    pub last_rotated_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub owner: Option<String>,
     #[serde(default)]
     pub secret: Option<String>,
 }
@@ -22,6 +38,23 @@ impl KeyEntry {
             secret.zeroize();
         }
         self.secret = None;
+    }
+
+    pub fn ensure_metadata_defaults(&mut self) -> bool {
+        let mut changed = false;
+        if self.created_at.timestamp() == 0 {
+            self.created_at = self.last_updated;
+            changed = true;
+        }
+        if self.last_rotated_at.is_none() {
+            self.last_rotated_at = Some(self.last_updated);
+            changed = true;
+        }
+        if self.rotation_period_days.is_some() && self.warn_before_days.is_none() {
+            self.warn_before_days = Some(14);
+            changed = true;
+        }
+        changed
     }
 }
 
@@ -54,12 +87,30 @@ impl VaultData {
             entry.zeroize_secret();
         }
     }
+
+    pub fn migrate_in_place(&mut self) -> bool {
+        let mut changed = false;
+        if self.version < VAULT_VERSION {
+            self.version = VAULT_VERSION;
+            changed = true;
+        }
+        for entry in self.keys.values_mut() {
+            if entry.ensure_metadata_defaults() {
+                changed = true;
+            }
+        }
+        changed
+    }
 }
 
 impl Drop for VaultData {
     fn drop(&mut self) {
         self.zeroize_secrets();
     }
+}
+
+pub fn migrate_vault_data(vault: &mut VaultData) -> bool {
+    vault.migrate_in_place()
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -167,6 +218,12 @@ mod tests {
                 description: "test".to_string(),
                 tags: vec!["ci".to_string()],
                 last_updated: Utc::now(),
+                created_at: Utc::now(),
+                expires_at: None,
+                rotation_period_days: None,
+                warn_before_days: None,
+                last_rotated_at: Some(Utc::now()),
+                owner: Some("ci".to_string()),
                 secret: Some("top-secret".to_string()),
             },
         );
@@ -187,8 +244,44 @@ mod tests {
             description: "drop coverage".to_string(),
             tags: vec!["coverage".to_string()],
             last_updated: Utc::now(),
+            created_at: Utc::now(),
+            expires_at: None,
+            rotation_period_days: None,
+            warn_before_days: None,
+            last_rotated_at: Some(Utc::now()),
+            owner: None,
             secret: Some("sensitive".to_string()),
         };
         drop(entry);
+    }
+
+    #[test]
+    fn migrate_vault_upgrades_version_and_key_metadata() {
+        let mut vault = VaultData::new([1; 16]);
+        vault.version = 1;
+        vault.keys.insert(
+            "MIGRATE_ME".to_string(),
+            KeyEntry {
+                name: "MIGRATE_ME".to_string(),
+                description: "legacy key".to_string(),
+                tags: vec![],
+                last_updated: Utc::now(),
+                created_at: default_created_at(),
+                expires_at: None,
+                rotation_period_days: Some(90),
+                warn_before_days: None,
+                last_rotated_at: None,
+                owner: None,
+                secret: None,
+            },
+        );
+
+        let changed = migrate_vault_data(&mut vault);
+        let entry = vault.keys.get("MIGRATE_ME").expect("key should exist");
+        assert!(changed);
+        assert_eq!(vault.version, VAULT_VERSION);
+        assert!(entry.created_at.timestamp() > 0);
+        assert_eq!(entry.warn_before_days, Some(14));
+        assert!(entry.last_rotated_at.is_some());
     }
 }

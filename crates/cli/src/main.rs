@@ -16,8 +16,12 @@ use chacha20poly1305::{
 };
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use clavisvault_core::{
+    audit_log::{AuditIntegrityStatus, AuditLedger, verify_ledger_integrity},
     encryption::{derive_master_key, lock_vault, unlock_vault},
     platform::current_platform_data_dir,
+    policy::{load_policy, validate_vault_policy},
+    recovery::run_recovery_drill,
+    rotation::{list_rotation_findings, rotate_key},
     safe_file::{LocalSafeFileOps, SafeFileOps},
     shell::{
         SESSION_TOKEN_ENV_VAR, ShellKind, VAULT_PATH_ENV_VAR, generate_hook, shell_env_assignments,
@@ -37,6 +41,8 @@ const SESSION_TOKEN_VERSION: u8 = 2;
 const SESSION_TOKEN_NAMESPACE: &str = "com.clavisvault.cli";
 const SESSION_TOKEN_SECRET_NAME: &str = "session-token-secret";
 const SESSION_TOKEN_RECORD_NAME: &str = "session-token-record";
+const DEFAULT_POLICY_PATH: &str = "policy/secret-policy.toml";
+const AUDIT_LEDGER_FILE_NAME: &str = "audit-ledger.json";
 
 #[derive(Debug, Clone)]
 struct CliPaths {
@@ -76,6 +82,22 @@ enum Command {
         auth: AuthOptions,
         name: String,
     },
+    RotateKey {
+        auth: AuthOptions,
+        name: String,
+        value: Option<String>,
+    },
+    PolicyCheck {
+        auth: AuthOptions,
+        policy_path: Option<PathBuf>,
+    },
+    AuditVerify {
+        ledger_path: Option<PathBuf>,
+    },
+    RecoveryDrill {
+        export_path: Option<PathBuf>,
+        export_passphrase: Option<String>,
+    },
     ShellHook {
         shell: ShellKind,
     },
@@ -114,6 +136,13 @@ fn run() -> Result<()> {
         } => run_add_key(paths, auth, name, value, tags),
         Command::List { auth } => run_list(paths, auth),
         Command::RemoveKey { auth, name } => run_remove_key(paths, auth, name),
+        Command::RotateKey { auth, name, value } => run_rotate_key(paths, auth, name, value),
+        Command::PolicyCheck { auth, policy_path } => run_policy_check(paths, auth, policy_path),
+        Command::AuditVerify { ledger_path } => run_audit_verify(paths, ledger_path),
+        Command::RecoveryDrill {
+            export_path,
+            export_passphrase,
+        } => run_recovery(paths, export_path, export_passphrase),
         Command::ShellHook { shell } => {
             println!("{}", generate_hook(shell));
             Ok(())
@@ -166,6 +195,10 @@ fn parse_args(args: Vec<String>) -> Result<(Command, CliPaths)> {
         "add-key" => parse_add_key_command(options)?,
         "list" => parse_list_command(options)?,
         "remove-key" | "rm-key" => parse_remove_key_command(options)?,
+        "rotate-key" => parse_rotate_key_command(options)?,
+        "policy" => parse_policy_command(options)?,
+        "audit" => parse_audit_command(options)?,
+        "recovery-drill" => parse_recovery_command(options)?,
         "shell-hook" => parse_shell_hook_command(options)?,
         "--help" | "-h" | "help" => Command::Help,
         other => bail!("unknown command: {other}"),
@@ -382,6 +415,148 @@ fn parse_remove_key_command(options: &[String]) -> Result<Command> {
     Ok(Command::RemoveKey { auth, name })
 }
 
+fn parse_rotate_key_command(options: &[String]) -> Result<Command> {
+    let mut auth = AuthOptions {
+        password: None,
+        session_token: None,
+    };
+    let mut name: Option<String> = None;
+    let mut value: Option<String> = None;
+
+    let mut i = 0;
+    while i < options.len() {
+        match options[i].as_str() {
+            "--name" => {
+                i += 1;
+                if i >= options.len() {
+                    bail!("missing value for --name");
+                }
+                name = Some(options[i].to_string());
+            }
+            "--value" => {
+                i += 1;
+                if i >= options.len() {
+                    bail!("missing value for --value");
+                }
+                value = Some(options[i].to_string());
+            }
+            "--password" => {
+                i += 1;
+                if i >= options.len() {
+                    bail!("missing value for --password");
+                }
+                auth.password = Some(options[i].to_string());
+            }
+            "--session-token" | "--token" => {
+                i += 1;
+                if i >= options.len() {
+                    bail!("missing value for --session-token");
+                }
+                auth.session_token = Some(options[i].to_string());
+            }
+            other => bail!("unknown rotate-key option: {other}"),
+        }
+        i += 1;
+    }
+
+    let name = name.ok_or_else(|| anyhow!("rotate-key requires --name"))?;
+    Ok(Command::RotateKey { auth, name, value })
+}
+
+fn parse_policy_command(options: &[String]) -> Result<Command> {
+    if options.is_empty() || options[0] != "check" {
+        bail!("policy command supports only `policy check`");
+    }
+
+    let mut auth = AuthOptions {
+        password: None,
+        session_token: None,
+    };
+    let mut policy_path: Option<PathBuf> = None;
+    let mut i = 1;
+    while i < options.len() {
+        match options[i].as_str() {
+            "--policy" => {
+                i += 1;
+                if i >= options.len() {
+                    bail!("missing value for --policy");
+                }
+                policy_path = Some(PathBuf::from(&options[i]));
+            }
+            "--password" => {
+                i += 1;
+                if i >= options.len() {
+                    bail!("missing value for --password");
+                }
+                auth.password = Some(options[i].to_string());
+            }
+            "--session-token" | "--token" => {
+                i += 1;
+                if i >= options.len() {
+                    bail!("missing value for --session-token");
+                }
+                auth.session_token = Some(options[i].to_string());
+            }
+            other => bail!("unknown policy check option: {other}"),
+        }
+        i += 1;
+    }
+
+    Ok(Command::PolicyCheck { auth, policy_path })
+}
+
+fn parse_audit_command(options: &[String]) -> Result<Command> {
+    if options.is_empty() || options[0] != "verify" {
+        bail!("audit command supports only `audit verify`");
+    }
+    let mut ledger_path: Option<PathBuf> = None;
+    let mut i = 1;
+    while i < options.len() {
+        match options[i].as_str() {
+            "--ledger" => {
+                i += 1;
+                if i >= options.len() {
+                    bail!("missing value for --ledger");
+                }
+                ledger_path = Some(PathBuf::from(&options[i]));
+            }
+            other => bail!("unknown audit verify option: {other}"),
+        }
+        i += 1;
+    }
+    Ok(Command::AuditVerify { ledger_path })
+}
+
+fn parse_recovery_command(options: &[String]) -> Result<Command> {
+    let mut export_path: Option<PathBuf> = None;
+    let mut export_passphrase: Option<String> = None;
+    let mut i = 0;
+    while i < options.len() {
+        match options[i].as_str() {
+            "--export-path" => {
+                i += 1;
+                if i >= options.len() {
+                    bail!("missing value for --export-path");
+                }
+                export_path = Some(PathBuf::from(&options[i]));
+            }
+            "--export-passphrase" => {
+                i += 1;
+                if i >= options.len() {
+                    bail!("missing value for --export-passphrase");
+                }
+                export_passphrase = Some(options[i].to_string());
+            }
+            other => bail!("unknown recovery-drill option: {other}"),
+        }
+        i += 1;
+    }
+    Ok(Command::RecoveryDrill {
+        export_path,
+        export_passphrase,
+    })
+}
+
 fn parse_shell_hook_command(options: &[String]) -> Result<Command> {
     let mut shell: Option<ShellKind> = None;
     let mut i = 0;
@@ -531,6 +706,12 @@ fn run_add_key(
             secret: Some(value),
             tags,
             last_updated: Utc::now(),
+            created_at: Utc::now(),
+            expires_at: None,
+            rotation_period_days: None,
+            warn_before_days: None,
+            last_rotated_at: Some(Utc::now()),
+            owner: None,
         },
     );
 
@@ -585,6 +766,89 @@ fn run_remove_key(paths: CliPaths, auth: AuthOptions, name: String) -> Result<()
     persist_vault(&paths.vault_path, &vault, &key)?;
     println!("removed {name}");
     Ok(())
+}
+
+fn run_rotate_key(
+    paths: CliPaths,
+    auth: AuthOptions,
+    name: String,
+    value: Option<String>,
+) -> Result<()> {
+    if !is_upper_snake_case(&name) {
+        bail!("key name must be UPPER_SNAKE_CASE");
+    }
+    let password = resolve_password(&auth)?;
+    let (mut vault, key) = unlock_existing_vault(&paths.vault_path, &password)?;
+    rotate_key(&mut vault, &name, value, Utc::now())?;
+    persist_vault(&paths.vault_path, &vault, &key)?;
+    println!("rotated {name}");
+    Ok(())
+}
+
+fn run_policy_check(
+    paths: CliPaths,
+    auth: AuthOptions,
+    policy_path: Option<PathBuf>,
+) -> Result<()> {
+    let password = resolve_password(&auth)?;
+    let (vault, _key) = unlock_existing_vault(&paths.vault_path, &password)?;
+    let policy_path = policy_path.unwrap_or_else(|| PathBuf::from(DEFAULT_POLICY_PATH));
+    let policy = load_policy(&policy_path)?;
+    let findings = list_rotation_findings(&vault, Utc::now());
+    let violations = validate_vault_policy(&vault, &policy, Utc::now());
+
+    if findings.is_empty() {
+        println!("rotation: no keys");
+    } else {
+        println!("rotation findings: {}", findings.len());
+    }
+
+    if violations.is_empty() {
+        println!("policy check PASSED");
+        return Ok(());
+    }
+
+    println!("policy check FAILED ({} violations)", violations.len());
+    for v in violations {
+        println!("- {} [{}] {}", v.key, v.code, v.message);
+    }
+    bail!("policy validation failed")
+}
+
+fn run_audit_verify(paths: CliPaths, ledger_path: Option<PathBuf>) -> Result<()> {
+    let ledger_path = ledger_path.unwrap_or_else(|| paths.data_dir.join(AUDIT_LEDGER_FILE_NAME));
+    let bytes = fs::read(&ledger_path)
+        .with_context(|| format!("failed reading audit ledger {}", ledger_path.display()))?;
+    let ledger: AuditLedger = serde_json::from_slice(&bytes)
+        .with_context(|| format!("failed parsing audit ledger {}", ledger_path.display()))?;
+    match verify_ledger_integrity(&ledger) {
+        AuditIntegrityStatus::Valid => {
+            println!("audit verify PASSED");
+            Ok(())
+        }
+        AuditIntegrityStatus::Invalid { index, reason } => {
+            bail!("audit verify FAILED at index {index}: {reason}")
+        }
+    }
+}
+
+fn run_recovery(
+    paths: CliPaths,
+    export_path: Option<PathBuf>,
+    export_passphrase: Option<String>,
+) -> Result<()> {
+    let report = run_recovery_drill(
+        &paths.vault_path,
+        export_path.as_deref(),
+        export_passphrase.as_deref(),
+    );
+    let rendered = serde_json::to_string_pretty(&report).context("serialize recovery report")?;
+    println!("{rendered}");
+    if report.success {
+        Ok(())
+    } else {
+        bail!("recovery drill failed")
+    }
 }
 
 fn resolve_password(auth: &AuthOptions) -> Result<String> {
@@ -929,6 +1193,10 @@ fn print_help() {
     println!("  add-key       Add or update a key");
     println!("  list          List keys with masked values");
     println!("  remove-key    Remove an existing key");
+    println!("  rotate-key    Mark a key as rotated (optionally update secret)");
+    println!("  policy check  Validate vault keys against policy/secret-policy.toml");
+    println!("  audit verify  Verify tamper-evident audit ledger");
+    println!("  recovery-drill Run backup/decryptability recovery checks");
     println!("  shell-hook    Print shell hook that calls `clavis env-load`");
     println!();
     println!("Examples:");
@@ -1128,6 +1396,12 @@ mod tests {
             secret: Some("sk-live-secret".to_string()),
             tags: vec![],
             last_updated: Utc::now(),
+            created_at: Utc::now(),
+            expires_at: None,
+            rotation_period_days: None,
+            warn_before_days: None,
+            last_rotated_at: Some(Utc::now()),
+            owner: None,
         };
         let without_secret = KeyEntry {
             name: "WITHOUT_SECRET".to_string(),
@@ -1135,6 +1409,12 @@ mod tests {
             secret: None,
             tags: vec![],
             last_updated: Utc::now(),
+            created_at: Utc::now(),
+            expires_at: None,
+            rotation_period_days: None,
+            warn_before_days: None,
+            last_rotated_at: Some(Utc::now()),
+            owner: None,
         };
 
         assert_eq!(cli_secret_value(&with_secret), Some("sk-live-secret"));

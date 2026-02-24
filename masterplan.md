@@ -83,3 +83,17 @@ Scope: Consolidated check of repository documentation against implementation sta
 - Extreme fuzz script controls now support 24h fuzz runtime via `CLAVIS_EXTREME_FUZZ_SECONDS` while CI continues to use a short constrained run.
 - Vendoring checks are clean: no `vendor/` directory, and no Cargo source override is configured for vendored dependencies.
 - No legacy doc-move was applied for original documentation (no `legacy/docs` migration path was used).
+
+## 2026-02-24 Extended Feature Pass
+
+- Vault schema migrated to v2 with key-level rotation metadata and in-place migration hooks.
+- Core exports now emit signed manifest v2 metadata and import verifies checksum/signature (legacy v1 manifests remain readable).
+- Core audit subsystem now exposes tamper-evident chain ledger types and integrity verification helpers.
+- Core policy engine added with `policy/secret-policy.toml` support.
+- Core recovery drill engine added for backup/decryptability checks.
+- Desktop Tauri command surface expanded with:
+  - `verify_audit_chain`, `list_rotation_findings`, `rotate_key`, `revoke_remote_session`, `run_recovery_drill`, `acknowledge_alert`.
+- Remote objects now track trust policy and repair state (`permissions`, `session_ttl_seconds`, `revoked_at`, `requires_repairing`).
+- Server now supports token scope/revocation semantics (`scp`, `jti`, `rid`) and remote `revoke` command.
+- CLI expanded with `rotate-key`, `policy check`, `audit verify`, and `recovery-drill`.
+- Alert schema expanded in `docs/alerts.md` with structured metadata fields (`id`, `severity`, `channel`, `dedupe_hours`, schedules, ack hints).

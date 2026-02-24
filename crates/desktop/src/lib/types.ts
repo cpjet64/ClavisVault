@@ -10,14 +10,20 @@ export interface DesktopSettings {
   accent: string;
   theme: string;
   biometricEnabled: boolean;
+  hardwareBackedUnlockEnabled: boolean;
   remoteSyncEnabled: boolean;
   wipeAfterTenFailsWarning: boolean;
+  alertAcknowledgements: Record<string, { untilVersion?: string | null; untilDate?: string | null }>;
 }
 
 export interface RemoteServer {
   id: string;
   name: string;
   endpoint: string;
+  permissions: string;
+  sessionTtlSeconds: number;
+  revokedAt?: string | null;
+  requiresRepairing: boolean;
   pairingCode?: string | null;
   relayFingerprint?: string | null;
   keyCount: number;
@@ -54,9 +60,43 @@ export interface AuditEntryView {
   at: string;
 }
 
+export interface AuditIntegrityView {
+  ok: boolean;
+  reason?: string | null;
+}
+
+export interface RotationFinding {
+  name: string;
+  status: "healthy" | "due" | "expired" | "noPolicy";
+  daysUntilDue?: number | null;
+  expiresAt?: string | null;
+  owner?: string | null;
+}
+
+export interface RecoveryCheckView {
+  name: string;
+  ok: boolean;
+  detail: string;
+}
+
+export interface RecoveryReportView {
+  startedAt: string;
+  success: boolean;
+  checks: RecoveryCheckView[];
+  reportPath?: string | null;
+}
+
 export interface AlertInfo {
+  id?: string;
   version: string;
   critical: boolean;
+  severity?: "critical" | "high" | "medium" | "low";
+  channel?: "security" | "release" | "ops";
+  dedupeHours?: number;
+  startsAt?: string;
+  endsAt?: string;
+  ackUntilVersion?: string;
+  ackUntilDate?: string;
   message: string;
 }
 
@@ -93,9 +133,16 @@ export interface AddRemoteRequest {
   endpoint: string;
   pairingCode?: string;
   relayFingerprint?: string;
+  permissions?: string;
+  sessionTtlSeconds?: number;
 }
 
 export interface PairingResult {
   remote: RemoteServer;
   noiseProof: string;
+}
+
+export interface RotateKeyRequest {
+  name: string;
+  secretValue?: string;
 }

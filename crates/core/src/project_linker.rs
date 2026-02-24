@@ -196,6 +196,12 @@ mod tests {
                 secret: None,
                 tags: vec!["integration".to_string()],
                 last_updated: Utc::now(),
+                created_at: Utc::now(),
+                expires_at: None,
+                rotation_period_days: None,
+                warn_before_days: None,
+                last_rotated_at: Some(Utc::now()),
+                owner: Some("integration".to_string()),
             },
         );
         keys

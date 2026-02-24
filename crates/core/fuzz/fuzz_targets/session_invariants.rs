@@ -59,6 +59,12 @@ fuzz_target!(|data: &[u8]| {
                 secret: Some(secret_from_span(data, cursor, 24)),
                 tags: vec!["fuzz".to_string()],
                 last_updated: Utc::now(),
+                created_at: Utc::now(),
+                expires_at: None,
+                rotation_period_days: None,
+                warn_before_days: None,
+                last_rotated_at: Some(Utc::now()),
+                owner: None,
             },
         );
     }

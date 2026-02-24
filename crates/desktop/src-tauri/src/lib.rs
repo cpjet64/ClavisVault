@@ -21,12 +21,18 @@ use clavisvault_core::platform::MacOsPlatform;
 use clavisvault_core::platform::WindowsPlatform;
 use clavisvault_core::{
     agents_updater::AgentsUpdater,
-    audit_log::{AuditEntry, AuditLog, AuditOperation, IdleLockTimer},
+    audit_log::{AuditEntry, AuditIntegrityStatus, AuditLog, AuditOperation, IdleLockTimer},
     encryption::{PasswordAttemptLimiter, derive_master_key, lock_vault, unlock_vault},
-    export::{decrypt_export, encrypt_export},
+    export::{decrypt_export_with_metadata, encrypt_export},
     openclaw::OpenClawUpdater,
     platform::{Platform, current_platform_config_dir, current_platform_data_dir},
+    policy::{load_policy, validate_vault_policy},
     project_linker::ProjectLinker,
+    recovery::run_recovery_drill as core_run_recovery_drill,
+    rotation::{
+        RotationFinding, list_rotation_findings as core_list_rotation_findings,
+        rotate_key as core_rotate_key,
+    },
     safe_file::{LocalSafeFileOps, SafeFileOps},
     shell::generate_all_hooks,
     types::{EncryptedVault, KeyEntry, MasterKey, VaultData},
@@ -60,7 +66,9 @@ const TRAY_LOCK_ID: &str = "tray-lock";
 const TRAY_UPDATES_ID: &str = "tray-updates";
 const TRAY_QUIT_ID: &str = "tray-quit";
 const REMOTE_COMMAND_ERASE: &str = "erase";
-const REMOTE_COMMAND_ALLOWED: [&str; 1] = [REMOTE_COMMAND_ERASE];
+const REMOTE_COMMAND_REVOKE: &str = "revoke";
+const REMOTE_COMMAND_ALLOWED: [&str; 2] = [REMOTE_COMMAND_ERASE, REMOTE_COMMAND_REVOKE];
+const POLICY_FILE_PATH: &str = "policy/secret-policy.toml";
 const NOISE_MSG_MAX_BYTES: usize = 64 * 1024;
 const REMOTE_FRAME_MAX_BYTES: usize = 64 * 1024 * 1024;
 const REMOTE_CERTIFICATE_SHA256_LEN: usize = 64;
@@ -68,6 +76,7 @@ const REMOTE_CERTIFICATE_SHA256_LEN: usize = 64;
 const KEYRING_SERVICE: &str = "com.clavisvault.desktop";
 const REMOTE_CLIENT_PRIVATE_KEY_RECORD: &str = "desktop-remote-client-private-key";
 const REMOTE_SESSION_TOKEN_RECORD_PREFIX: &str = "desktop-remote-session-token-";
+const HARDWARE_MASTER_KEY_RECORD: &str = "desktop-hardware-master-key";
 #[cfg(not(test))]
 const KEYRING_MISSING: &str = "No credentials found for the given service";
 
@@ -96,6 +105,13 @@ struct RemotePushResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+struct AlertAcknowledgement {
+    until_version: Option<String>,
+    until_date: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 #[serde(default)]
 struct DesktopSettings {
     idle_auto_lock_minutes: i64,
@@ -107,11 +123,14 @@ struct DesktopSettings {
     accent: String,
     theme: String,
     biometric_enabled: bool,
+    hardware_backed_unlock_enabled: bool,
     remote_sync_enabled: bool,
     remote_client_fingerprint: String,
     #[serde(default, skip_serializing)]
     remote_client_private_key: Option<String>,
     wipe_after_ten_fails_warning: bool,
+    #[serde(default)]
+    alert_acknowledgements: HashMap<String, AlertAcknowledgement>,
     remotes: Vec<RemoteServer>,
 }
 
@@ -248,6 +267,18 @@ fn load_remote_session_token(remote_id: &str) -> Option<String> {
         .flatten()
 }
 
+fn store_hardware_master_key(key: &MasterKey) {
+    let _ = write_keyring_secret(HARDWARE_MASTER_KEY_RECORD, &hex_of(key.as_slice()));
+}
+
+fn load_hardware_master_key() -> Option<MasterKey> {
+    read_keyring_secret(HARDWARE_MASTER_KEY_RECORD)
+        .ok()
+        .flatten()
+        .and_then(|hex| hex_decode(&hex).ok())
+        .map(MasterKey::new)
+}
+
 fn delete_remote_session_token(remote_id: &str) {
     if remote_id.is_empty() {
         return;
@@ -325,10 +356,12 @@ impl Default for DesktopSettings {
             accent: "copper".to_string(),
             theme: "system".to_string(),
             biometric_enabled: false,
+            hardware_backed_unlock_enabled: false,
             remote_sync_enabled: false,
             remote_client_fingerprint: String::new(),
             remote_client_private_key: Some(random_remote_client_private_key()),
             wipe_after_ten_fails_warning: true,
+            alert_acknowledgements: HashMap::new(),
             remotes: Vec::new(),
         };
 
@@ -343,6 +376,14 @@ struct RemoteServer {
     id: String,
     name: String,
     endpoint: String,
+    #[serde(default)]
+    permissions: String,
+    #[serde(default)]
+    session_ttl_seconds: u64,
+    #[serde(default)]
+    revoked_at: Option<String>,
+    #[serde(default)]
+    requires_repairing: bool,
     pairing_code: Option<String>,
     relay_fingerprint: Option<String>,
     #[serde(default)]
@@ -394,9 +435,48 @@ struct AuditEntryView {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct AuditIntegrityView {
+    ok: bool,
+    reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RotateKeyRequest {
+    name: String,
+    secret_value: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RecoveryCheckView {
+    name: String,
+    ok: bool,
+    detail: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RecoveryReportView {
+    started_at: String,
+    success: bool,
+    checks: Vec<RecoveryCheckView>,
+    report_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct AlertInfo {
+    id: Option<String>,
     version: String,
     critical: bool,
+    severity: Option<String>,
+    channel: Option<String>,
+    dedupe_hours: Option<u64>,
+    starts_at: Option<String>,
+    ends_at: Option<String>,
+    ack_until_version: Option<String>,
+    ack_until_date: Option<String>,
     message: String,
 }
 
@@ -443,6 +523,8 @@ struct AddRemoteRequest {
     endpoint: String,
     pairing_code: Option<String>,
     relay_fingerprint: Option<String>,
+    permissions: Option<String>,
+    session_ttl_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -607,6 +689,9 @@ fn unlock_vault_command(
         let key = derive_master_key(&password, &salt).map_err(err_to_string)?;
         let vault = VaultData::new(salt);
         persist_encrypted_vault(&mut inner.vault, &vault, &key).map_err(err_to_string)?;
+        if inner.settings.hardware_backed_unlock_enabled {
+            store_hardware_master_key(&key);
+        }
 
         inner.vault.decrypted = Some(vault);
         inner.vault.master_key = Some(key);
@@ -631,10 +716,45 @@ fn unlock_vault_command(
         .encrypted
         .clone()
         .ok_or_else(|| "vault unavailable".to_string())?;
+
+    if password.trim().is_empty()
+        && inner.settings.hardware_backed_unlock_enabled
+        && let Some(hardware_key) = load_hardware_master_key()
+    {
+        match unlock_vault(&encrypted, &hardware_key) {
+            Ok(vault) => {
+                inner.vault.decrypted = Some(vault);
+                inner.vault.master_key = Some(hardware_key);
+                inner.vault.secret_cache.clear();
+                inner.vault.limiter.register_success(now);
+                inner.vault.next_retry_at = None;
+                inner.vault.wipe_recommended = false;
+                inner.vault.idle_timer.touch(now);
+                populate_runtime_secret_cache(&mut inner.vault);
+                inner.vault.audit.record(
+                    AuditOperation::BiometricUnlock,
+                    None,
+                    "vault unlocked via hardware-backed key",
+                );
+                set_tray_locked_state(&app, false);
+                return Ok(inner.vault.summary());
+            }
+            Err(err) => {
+                inner.vault.audit.record(
+                    AuditOperation::FailedUnlock,
+                    None,
+                    format!("hardware-backed unlock failed: {err}"),
+                );
+            }
+        }
+    }
     let key = derive_master_key(&password, &encrypted.header.salt).map_err(err_to_string)?;
 
     match unlock_vault(&encrypted, &key) {
         Ok(vault) => {
+            if inner.settings.hardware_backed_unlock_enabled {
+                store_hardware_master_key(&key);
+            }
             inner.vault.decrypted = Some(vault);
             inner.vault.master_key = Some(key);
             inner.vault.secret_cache.clear();
@@ -758,6 +878,7 @@ fn upsert_key(
 
     let now = Utc::now();
     let key_name = request.name.clone();
+    let mut policy_warnings = Vec::new();
     {
         let vault = inner
             .vault
@@ -773,7 +894,27 @@ fn upsert_key(
                 secret: secret_value,
                 tags: request.tags,
                 last_updated: now,
+                created_at: now,
+                expires_at: None,
+                rotation_period_days: Some(90),
+                warn_before_days: Some(14),
+                last_rotated_at: Some(now),
+                owner: None,
             },
+        );
+        let policy_path = PathBuf::from(POLICY_FILE_PATH);
+        if policy_path.exists()
+            && let Ok(policy) = load_policy(&policy_path)
+        {
+            let warnings = validate_vault_policy(vault, &policy, now);
+            policy_warnings.extend(warnings.into_iter().filter(|item| item.key == key_name));
+        }
+    }
+    for warning in policy_warnings {
+        inner.vault.audit.record(
+            AuditOperation::FileUpdate,
+            Some(warning.key),
+            format!("policy warning [{}]: {}", warning.code, warning.message),
         );
     }
     populate_runtime_secret_cache(&mut inner.vault);
@@ -882,7 +1023,14 @@ fn import_vault(
     enforce_idle_lock(&mut inner.vault);
 
     let bytes = fs::read(&input_path).map_err(err_to_string)?;
-    let imported = decrypt_export(&bytes, &passphrase).map_err(err_to_string)?;
+    let imported = decrypt_export_with_metadata(&bytes, &passphrase).map_err(err_to_string)?;
+    if imported.metadata.legacy_manifest {
+        inner.vault.audit.record(
+            AuditOperation::FileUpdate,
+            None,
+            "imported legacy export manifest v1",
+        );
+    }
     let key = inner
         .vault
         .master_key
@@ -890,8 +1038,8 @@ fn import_vault(
         .cloned()
         .ok_or_else(|| "unlock vault before importing".to_string())?;
 
-    persist_encrypted_vault(&mut inner.vault, &imported, &key).map_err(err_to_string)?;
-    inner.vault.decrypted = Some(imported);
+    persist_encrypted_vault(&mut inner.vault, &imported.vault, &key).map_err(err_to_string)?;
+    inner.vault.decrypted = Some(imported.vault);
     inner.vault.secret_cache.clear();
     populate_runtime_secret_cache(&mut inner.vault);
     inner.vault.audit.record(
@@ -1047,6 +1195,13 @@ fn ensure_settings_defaults(mut settings: DesktopSettings) -> DesktopSettings {
         settings.remotes = Vec::new();
     }
     for remote in &mut settings.remotes {
+        if remote.permissions.trim().is_empty() {
+            remote.permissions = "full".to_string();
+        }
+        if remote.session_ttl_seconds == 0 {
+            remote.session_ttl_seconds = 86_400;
+        }
+
         if let Some(server_fingerprint) = remote.server_fingerprint.as_deref()
             && let Ok(parsed) = parse_remote_fingerprint(server_fingerprint)
         {
@@ -1111,6 +1266,18 @@ async fn push_vault_to_remote_if_possible(
     encrypted_vault_payload: &[u8],
 ) -> Result<RemotePushResponse> {
     validate_remote_command(command)?;
+    if remote.requires_repairing && command != Some(REMOTE_COMMAND_REVOKE) {
+        bail!("remote requires re-pairing before sync commands");
+    }
+    match remote.permissions.as_str() {
+        "read_only" if command != Some(REMOTE_COMMAND_REVOKE) => {
+            bail!("remote policy is read_only; push/erase blocked")
+        }
+        "push_only" if command == Some(REMOTE_COMMAND_ERASE) => {
+            bail!("remote policy is push_only; erase blocked")
+        }
+        _ => {}
+    }
     if remote.endpoint.contains('?') {
         bail!("invalid remote endpoint");
     }
@@ -1466,6 +1633,10 @@ async fn pair_and_add_remote(
             id,
             name: request.name,
             endpoint: endpoint.clone(),
+            permissions: request.permissions.unwrap_or_else(|| "full".to_string()),
+            session_ttl_seconds: request.session_ttl_seconds.unwrap_or(86_400),
+            revoked_at: None,
+            requires_repairing: false,
             pairing_code: Some(pairing_code.clone()),
             relay_fingerprint: Some(server_fingerprint.clone()),
             server_fingerprint: Some(server_fingerprint.clone()),
@@ -1618,6 +1789,180 @@ fn list_audit_entries(
 }
 
 #[tauri::command]
+fn verify_audit_chain(
+    state: State<'_, DesktopState>,
+) -> std::result::Result<AuditIntegrityView, String> {
+    let inner = state.lock_inner().map_err(err_to_string)?;
+    let result = inner.vault.audit.verify_integrity();
+    Ok(match result {
+        AuditIntegrityStatus::Valid => AuditIntegrityView {
+            ok: true,
+            reason: None,
+        },
+        AuditIntegrityStatus::Invalid { index, reason } => AuditIntegrityView {
+            ok: false,
+            reason: Some(format!("index {index}: {reason}")),
+        },
+    })
+}
+
+#[tauri::command]
+fn list_rotation_findings(
+    state: State<'_, DesktopState>,
+) -> std::result::Result<Vec<RotationFinding>, String> {
+    let mut inner = state.lock_inner().map_err(err_to_string)?;
+    enforce_idle_lock(&mut inner.vault);
+    let vault = inner
+        .vault
+        .decrypted
+        .as_ref()
+        .ok_or_else(|| "vault is locked".to_string())?;
+    Ok(core_list_rotation_findings(vault, Utc::now()))
+}
+
+#[tauri::command]
+fn rotate_key(
+    state: State<'_, DesktopState>,
+    request: RotateKeyRequest,
+) -> std::result::Result<VaultSummary, String> {
+    let mut inner = state.lock_inner().map_err(err_to_string)?;
+    enforce_idle_lock(&mut inner.vault);
+    let vault = inner
+        .vault
+        .decrypted
+        .as_mut()
+        .ok_or_else(|| "vault is locked".to_string())?;
+    core_rotate_key(vault, &request.name, request.secret_value, Utc::now())
+        .map_err(err_to_string)?;
+    persist_unlocked(&mut inner.vault).map_err(err_to_string)?;
+    inner.vault.audit.record(
+        AuditOperation::FileUpdate,
+        Some(request.name),
+        "rotated key",
+    );
+    Ok(inner.vault.summary())
+}
+
+#[tauri::command]
+async fn revoke_remote_session(
+    state: State<'_, DesktopState>,
+    remote_id: String,
+) -> std::result::Result<Vec<RemoteServer>, String> {
+    let (target, fingerprint, client_private_key, payload) = {
+        let mut inner = state.lock_inner().map_err(err_to_string)?;
+        ensure_remote_session_unlocked(&mut inner.vault).map_err(err_to_string)?;
+        let target = inner
+            .remotes
+            .iter()
+            .find(|remote| remote.id == remote_id)
+            .cloned()
+            .ok_or_else(|| format!("remote not found: {remote_id}"))?;
+        let payload = remote_payload_from_state(&inner).map_err(err_to_string)?;
+        let fingerprint = inner.settings.remote_client_fingerprint.clone();
+        let client_private_key =
+            remote_client_private_key_bytes(&inner.settings).map_err(|err| format!("{err}"))?;
+        (target, fingerprint, client_private_key, payload)
+    };
+
+    let _ = push_vault_to_remote_if_possible(
+        &target,
+        &fingerprint,
+        &client_private_key,
+        None,
+        Some(REMOTE_COMMAND_REVOKE),
+        Some("remote session revoked"),
+        &payload,
+    )
+    .await;
+
+    let mut inner = state.lock_inner().map_err(err_to_string)?;
+    if let Some(remote) = inner
+        .remotes
+        .iter_mut()
+        .find(|remote| remote.id == remote_id)
+    {
+        remote.requires_repairing = true;
+        remote.revoked_at = Some(Utc::now().to_rfc3339());
+        remote.session_token = None;
+    }
+    delete_remote_session_token(&remote_id);
+    inner.settings.remotes = inner.remotes.clone();
+    persist_settings_record(&inner.settings_path, &inner.settings).map_err(err_to_string)?;
+    inner.vault.audit.record(
+        AuditOperation::Push,
+        Some(remote_id),
+        "remote session revoked",
+    );
+    Ok(inner.remotes.clone())
+}
+
+#[tauri::command]
+fn run_recovery_drill(
+    state: State<'_, DesktopState>,
+    export_path: Option<String>,
+    export_passphrase: Option<String>,
+) -> std::result::Result<RecoveryReportView, String> {
+    let mut inner = state.lock_inner().map_err(err_to_string)?;
+    let export = export_path.as_deref().map(PathBuf::from);
+    let report = core_run_recovery_drill(
+        &inner.vault.encrypted_path,
+        export.as_deref(),
+        export_passphrase.as_deref(),
+    );
+    let report_dir = inner
+        .vault
+        .encrypted_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("recovery-drills");
+    fs::create_dir_all(&report_dir).map_err(err_to_string)?;
+    let report_path = report_dir.join(format!(
+        "report-{}.json",
+        report.started_at.format("%Y%m%d%H%M%S")
+    ));
+    let rendered = serde_json::to_vec_pretty(&report).map_err(err_to_string)?;
+    backup_then_atomic_write(&report_path, &rendered).map_err(err_to_string)?;
+    inner.vault.audit.record(
+        AuditOperation::FileUpdate,
+        Some(path_to_string(&report_path)),
+        "recovery drill executed",
+    );
+    Ok(RecoveryReportView {
+        started_at: report.started_at.to_rfc3339(),
+        success: report.success,
+        checks: report
+            .checks
+            .into_iter()
+            .map(|check| RecoveryCheckView {
+                name: check.name,
+                ok: check.ok,
+                detail: check.detail,
+            })
+            .collect(),
+        report_path: Some(path_to_string(report_path)),
+    })
+}
+
+#[tauri::command]
+fn acknowledge_alert(
+    state: State<'_, DesktopState>,
+    alert_id: String,
+    until_version: Option<String>,
+    until_date: Option<String>,
+) -> std::result::Result<DesktopSettings, String> {
+    let mut inner = state.lock_inner().map_err(err_to_string)?;
+    inner.settings.alert_acknowledgements.insert(
+        alert_id,
+        AlertAcknowledgement {
+            until_version,
+            until_date,
+        },
+    );
+    persist_settings_record(&inner.settings_path, &inner.settings).map_err(err_to_string)?;
+    Ok(inner.settings.clone())
+}
+
+#[tauri::command]
 fn shell_hooks() -> HashMap<String, String> {
     generate_all_hooks()
         .into_iter()
@@ -1642,7 +1987,10 @@ fn biometric_available(_app: AppHandle) -> bool {
 }
 
 #[tauri::command]
-async fn check_updates(app: AppHandle) -> std::result::Result<UpdateStatus, String> {
+async fn check_updates(
+    state: State<'_, DesktopState>,
+    app: AppHandle,
+) -> std::result::Result<UpdateStatus, String> {
     let mut status = UpdateStatus::default();
 
     #[cfg(not(debug_assertions))]
@@ -1654,10 +2002,15 @@ async fn check_updates(app: AppHandle) -> std::result::Result<UpdateStatus, Stri
         status.body = update.body.clone();
     }
 
-    if let Ok(alerts) = read_alerts(&app)
-        && let Some(critical) = alerts.into_iter().find(|alert| alert.critical)
-    {
-        status.critical_alert = Some(critical);
+    let settings = state.lock_inner().map_err(err_to_string)?.settings.clone();
+    if let Ok(alerts) = read_alerts(&app) {
+        let now = Utc::now();
+        let selected = alerts
+            .into_iter()
+            .filter(|alert| alert_is_active_now(alert, now))
+            .filter(|alert| !alert_is_acknowledged(&settings, alert, now))
+            .max_by_key(|alert| if alert.critical { 2 } else { 1 });
+        status.critical_alert = selected.and_then(|alert| alert.critical.then_some(alert));
     }
 
     Ok(status)
@@ -1701,9 +2054,15 @@ pub fn run() {
                 list_remotes,
                 pair_and_add_remote,
                 remove_remote,
+                revoke_remote_session,
                 get_settings,
                 save_settings,
                 list_audit_entries,
+                verify_audit_chain,
+                list_rotation_findings,
+                rotate_key,
+                run_recovery_drill,
+                acknowledge_alert,
                 shell_hooks,
                 biometric_available,
                 check_updates
@@ -1754,9 +2113,15 @@ pub fn run() {
                 list_remotes,
                 pair_and_add_remote,
                 remove_remote,
+                revoke_remote_session,
                 get_settings,
                 save_settings,
                 list_audit_entries,
+                verify_audit_chain,
+                list_rotation_findings,
+                rotate_key,
+                run_recovery_drill,
+                acknowledge_alert,
                 shell_hooks,
                 biometric_available,
                 check_updates
@@ -2122,8 +2487,16 @@ fn parse_alerts_markdown(content: &str) -> Vec<AlertInfo> {
 }
 
 fn parse_alert_block(block: &str) -> Option<AlertInfo> {
+    let mut id: Option<String> = None;
     let mut version: Option<String> = None;
     let mut critical: Option<bool> = None;
+    let mut severity: Option<String> = None;
+    let mut channel: Option<String> = None;
+    let mut dedupe_hours: Option<u64> = None;
+    let mut starts_at: Option<String> = None;
+    let mut ends_at: Option<String> = None;
+    let mut ack_until_version: Option<String> = None;
+    let mut ack_until_date: Option<String> = None;
     let mut message: Option<String> = None;
 
     for line in block.lines() {
@@ -2140,18 +2513,82 @@ fn parse_alert_block(block: &str) -> Option<AlertInfo> {
             .to_string();
 
         match key.trim() {
+            "id" => id = Some(value),
             "version" => version = Some(value),
             "critical" => critical = Some(value.eq_ignore_ascii_case("true")),
+            "severity" => severity = Some(value),
+            "channel" => channel = Some(value),
+            "dedupe_hours" => dedupe_hours = value.parse::<u64>().ok(),
+            "starts_at" => starts_at = Some(value),
+            "ends_at" => ends_at = Some(value),
+            "ack_until_version" => ack_until_version = Some(value),
+            "ack_until_date" => ack_until_date = Some(value),
             "message" => message = Some(value),
             _ => {}
         }
     }
 
     Some(AlertInfo {
+        id,
         version: version?,
         critical: critical?,
+        severity,
+        channel,
+        dedupe_hours,
+        starts_at,
+        ends_at,
+        ack_until_version,
+        ack_until_date,
         message: message?,
     })
+}
+
+fn alert_is_active_now(alert: &AlertInfo, now: DateTime<Utc>) -> bool {
+    if let Some(starts_at) = alert.starts_at.as_deref()
+        && let Ok(start) = parse_rfc3339_utc(starts_at)
+        && now < start
+    {
+        return false;
+    }
+    if let Some(ends_at) = alert.ends_at.as_deref()
+        && let Ok(end) = parse_rfc3339_utc(ends_at)
+        && now > end
+    {
+        return false;
+    }
+    true
+}
+
+fn alert_is_acknowledged(
+    settings: &DesktopSettings,
+    alert: &AlertInfo,
+    now: DateTime<Utc>,
+) -> bool {
+    let key = alert
+        .id
+        .clone()
+        .unwrap_or_else(|| format!("{}:{}", alert.version, alert.message));
+    let Some(ack) = settings.alert_acknowledgements.get(&key) else {
+        return false;
+    };
+    if let Some(until_version) = ack.until_version.as_deref()
+        && alert.version.as_str() <= until_version
+    {
+        return true;
+    }
+    if let Some(until_date) = ack.until_date.as_deref()
+        && let Ok(until) = parse_rfc3339_utc(until_date)
+        && now <= until
+    {
+        return true;
+    }
+    false
+}
+
+fn parse_rfc3339_utc(value: &str) -> Result<DateTime<Utc>> {
+    let parsed = DateTime::parse_from_rfc3339(value)
+        .with_context(|| format!("invalid RFC3339 timestamp: {value}"))?;
+    Ok(parsed.with_timezone(&Utc))
 }
 
 fn build_tray(app: &AppHandle) -> Result<()> {
@@ -2277,6 +2714,12 @@ mod tests {
                 secret: Some("fixture-secret".to_string()),
                 tags: vec!["test".to_string()],
                 last_updated: Utc::now(),
+                created_at: Utc::now(),
+                expires_at: None,
+                rotation_period_days: Some(90),
+                warn_before_days: Some(14),
+                last_rotated_at: Some(Utc::now()),
+                owner: Some("test".to_string()),
             },
         );
         let key = derive_master_key(password, &vault.salt).expect("fixture key derivation");
@@ -2433,6 +2876,10 @@ message: "Optional update"
             id: "remote-1".to_string(),
             name: "remote".to_string(),
             endpoint: "127.0.0.1:51821".to_string(),
+            permissions: "full".to_string(),
+            session_ttl_seconds: 86_400,
+            revoked_at: None,
+            requires_repairing: false,
             pairing_code: None,
             relay_fingerprint: None,
             server_fingerprint: None,
@@ -2728,6 +3175,10 @@ message: "Optional update"
                 id: "remote-1".to_string(),
                 name: "remote".to_string(),
                 endpoint: "127.0.0.1:51821".to_string(),
+                permissions: "full".to_string(),
+                session_ttl_seconds: 86_400,
+                revoked_at: None,
+                requires_repairing: false,
                 pairing_code: None,
                 relay_fingerprint: None,
                 server_fingerprint: None,
@@ -2754,6 +3205,10 @@ message: "Optional update"
                 id: remote_id.clone(),
                 name: "remote".to_string(),
                 endpoint: "127.0.0.1:51821".to_string(),
+                permissions: "full".to_string(),
+                session_ttl_seconds: 86_400,
+                revoked_at: None,
+                requires_repairing: false,
                 pairing_code: None,
                 relay_fingerprint: None,
                 server_fingerprint: None,
@@ -2787,6 +3242,10 @@ message: "Optional update"
             id: remote_id,
             name: "remote".to_string(),
             endpoint: "127.0.0.1:51821".to_string(),
+            permissions: "full".to_string(),
+            session_ttl_seconds: 86_400,
+            revoked_at: None,
+            requires_repairing: false,
             pairing_code: None,
             relay_fingerprint: None,
             server_fingerprint: None,
@@ -2814,6 +3273,12 @@ message: "Optional update"
                 secret: Some("very-secret".to_string()),
                 tags: vec!["tag".to_string()],
                 last_updated: Utc::now(),
+                created_at: Utc::now(),
+                expires_at: None,
+                rotation_period_days: Some(90),
+                warn_before_days: Some(14),
+                last_rotated_at: Some(Utc::now()),
+                owner: None,
             },
         );
         runtime.decrypted = Some(data);

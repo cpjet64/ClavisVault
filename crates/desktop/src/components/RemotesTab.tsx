@@ -8,6 +8,7 @@ interface RemotesTabProps {
   remotes: RemoteServer[];
   onAddRemote: (request: AddRemoteRequest) => Promise<PairingResult>;
   onRemoveRemote: (remoteId: string) => Promise<void>;
+  onRevokeRemoteSession?: (remoteId: string) => Promise<void>;
 }
 
 const hasRequiredInput = (value: string) => value.trim().length > 0;
@@ -36,11 +37,19 @@ const endpointLooksLikeHostPort = (endpoint: string): boolean => {
   return host.length > 0;
 };
 
-export function RemotesTab({ enabled, remotes, onAddRemote, onRemoveRemote }: RemotesTabProps) {
+export function RemotesTab({
+  enabled,
+  remotes,
+  onAddRemote,
+  onRemoveRemote,
+  onRevokeRemoteSession,
+}: RemotesTabProps) {
   const [name, setName] = useState("");
   const [endpoint, setEndpoint] = useState("");
   const [pairingCode, setPairingCode] = useState("");
   const [relayFingerprint, setRelayFingerprint] = useState("");
+  const [permissions, setPermissions] = useState("full");
+  const [sessionTtlSeconds, setSessionTtlSeconds] = useState("86400");
   const [latestProof, setLatestProof] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -101,12 +110,16 @@ export function RemotesTab({ enabled, remotes, onAddRemote, onRemoveRemote }: Re
                 endpoint: endpoint.trim(),
                 pairingCode: pairingCode.trim() || undefined,
                 relayFingerprint: relayFingerprint.trim() || undefined,
+                permissions,
+                sessionTtlSeconds: Number(sessionTtlSeconds) || undefined,
               });
               setLatestProof(result.noiseProof);
               setName("");
               setEndpoint("");
               setPairingCode("");
               setRelayFingerprint("");
+              setPermissions("full");
+              setSessionTtlSeconds("86400");
             } catch (error) {
               setSubmitError(String(error));
             } finally {
@@ -142,6 +155,21 @@ export function RemotesTab({ enabled, remotes, onAddRemote, onRemoveRemote }: Re
             className="rounded-lg border border-accent/20 bg-surface/70 px-3 py-2 text-sm text-text outline-none"
             required
           />
+          <select
+            value={permissions}
+            onChange={(event) => setPermissions(event.target.value)}
+            className="rounded-lg border border-accent/20 bg-surface/70 px-3 py-2 text-sm text-text outline-none"
+          >
+            <option value="full">full</option>
+            <option value="push_only">push_only</option>
+            <option value="read_only">read_only</option>
+          </select>
+          <input
+            value={sessionTtlSeconds}
+            onChange={(event) => setSessionTtlSeconds(event.target.value)}
+            placeholder="Session TTL seconds"
+            className="rounded-lg border border-accent/20 bg-surface/70 px-3 py-2 text-sm text-text outline-none"
+          />
           <button
             type="submit"
             disabled={!enabled || !canSubmit}
@@ -173,16 +201,28 @@ export function RemotesTab({ enabled, remotes, onAddRemote, onRemoveRemote }: Re
                 </div>
                 <p className="text-xs text-text/70">{remote.endpoint}</p>
                 <p className="text-xs text-text/60">
-                  {remote.keyCount} keys | last sync {remote.lastSync ?? "never"}
+                  {remote.keyCount} keys | last sync {remote.lastSync ?? "never"} | policy {remote.permissions}
                 </p>
+                {remote.requiresRepairing ? (
+                  <p className="text-xs text-amber-200">Session revoked. Re-pair required.</p>
+                ) : null}
               </div>
-              <button
-                type="button"
-                onClick={() => onRemoveRemote(remote.id)}
-                className="inline-flex items-center gap-2 rounded-lg border border-rose-200/30 px-3 py-2 text-xs text-rose-100"
-              >
-                <ShieldX className="h-4 w-4" /> Remove + Remote Erase
-              </button>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => onRemoveRemote(remote.id)}
+                  className="inline-flex items-center gap-2 rounded-lg border border-rose-200/30 px-3 py-2 text-xs text-rose-100"
+                >
+                  <ShieldX className="h-4 w-4" /> Remove + Remote Erase
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onRevokeRemoteSession?.(remote.id)}
+                  className="inline-flex items-center gap-2 rounded-lg border border-amber-200/30 px-3 py-2 text-xs text-amber-100"
+                >
+                  Revoke Session
+                </button>
+              </div>
             </div>
           ))}
           {remotes.length === 0 ? (

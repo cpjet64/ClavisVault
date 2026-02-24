@@ -138,6 +138,12 @@ mod tests {
                 secret: None,
                 tags: vec!["api".to_string()],
                 last_updated: now,
+                created_at: now,
+                expires_at: None,
+                rotation_period_days: None,
+                warn_before_days: None,
+                last_rotated_at: Some(now),
+                owner: Some("qa".to_string()),
             },
         );
         keys
@@ -222,6 +228,12 @@ mod tests {
             secret: None,
             tags: vec!["cloud".to_string()],
             last_updated: Utc::now(),
+            created_at: Utc::now(),
+            expires_at: None,
+            rotation_period_days: None,
+            warn_before_days: None,
+            last_rotated_at: Some(Utc::now()),
+            owner: None,
         };
         keys.insert("AZURE_SECRET".to_string(), later);
 
@@ -245,6 +257,12 @@ mod tests {
                 secret: None,
                 tags: vec!["cloud".to_string()],
                 last_updated: Utc::now(),
+                created_at: Utc::now(),
+                expires_at: None,
+                rotation_period_days: None,
+                warn_before_days: None,
+                last_rotated_at: Some(Utc::now()),
+                owner: None,
             },
         );
 
@@ -270,6 +288,12 @@ mod tests {
                 secret: None,
                 tags: vec![],
                 last_updated: Utc::now(),
+                created_at: Utc::now(),
+                expires_at: None,
+                rotation_period_days: None,
+                warn_before_days: None,
+                last_rotated_at: Some(Utc::now()),
+                owner: None,
             },
         );
 

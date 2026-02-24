@@ -43,6 +43,12 @@ fuzz_target!(|data: &[u8]| {
                 description: key_entry_value(data, cursor + index * 5),
                 tags: Vec::new(),
                 last_updated: chrono::Utc::now(),
+                created_at: chrono::Utc::now(),
+                expires_at: None,
+                rotation_period_days: None,
+                warn_before_days: None,
+                last_rotated_at: Some(chrono::Utc::now()),
+                owner: None,
                 secret: Some(key_entry_value(data, cursor + index * 7)),
             },
         );

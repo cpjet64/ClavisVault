@@ -12,6 +12,7 @@ interface VaultTabProps {
   onUpsert: (request: UpsertKeyRequest) => Promise<void>;
   onDelete: (name: string) => Promise<void>;
   onCopy: (name: string) => Promise<void>;
+  onRotate?: (name: string) => Promise<void>;
   onExport: (passphrase: string, path: string) => Promise<void>;
   onImport: (passphrase: string, path: string) => Promise<void>;
 }
@@ -25,6 +26,7 @@ export function VaultTab({
   onUpsert,
   onDelete,
   onCopy,
+  onRotate,
   onExport,
   onImport,
 }: VaultTabProps) {
@@ -219,6 +221,13 @@ export function VaultTab({
                         className="inline-flex items-center gap-1 rounded-md border border-rose-300/40 px-2 py-1 text-xs text-rose-100"
                       >
                         <Trash2 className="h-3 w-3" /> Delete
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onRotate?.(key.name)}
+                        className="rounded-md border border-amber-300/40 px-2 py-1 text-xs text-amber-100"
+                      >
+                        Rotate
                       </button>
                     </div>
                   </td>

@@ -41,7 +41,8 @@ const ED25519_SIGNING_KEY_LEN: usize = 32;
 const NOISE_MSG_MAX_BYTES: usize = 64 * 1024;
 const PUSH_FRAME_MAX_BYTES: usize = 64 * 1024 * 1024;
 const REMOTE_COMMAND_ERASE: &str = "erase";
-const REMOTE_COMMAND_ALLOWED: [&str; 1] = [REMOTE_COMMAND_ERASE];
+const REMOTE_COMMAND_REVOKE: &str = "revoke";
+const REMOTE_COMMAND_ALLOWED: [&str; 2] = [REMOTE_COMMAND_ERASE, REMOTE_COMMAND_REVOKE];
 
 #[derive(Debug, Clone)]
 struct ServerPaths {
@@ -76,6 +77,12 @@ struct PairingChallenge {
 struct TokenRecord {
     token: String,
     expires_at: DateTime<Utc>,
+    #[serde(default)]
+    token_id: String,
+    #[serde(default)]
+    scopes: Vec<String>,
+    #[serde(default)]
+    remote_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -83,6 +90,12 @@ struct JwtPayload {
     sub: String,
     iat: i64,
     exp: i64,
+    #[serde(default)]
+    jti: String,
+    #[serde(default)]
+    scp: Vec<String>,
+    #[serde(default)]
+    rid: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,6 +118,8 @@ struct ServerStateFile {
     tls_key_der_hex: Option<String>,
     bound_client_fingerprint: Option<String>,
     bound_server_fingerprint: Option<String>,
+    #[serde(default)]
+    revoked_token_ids: Vec<String>,
 }
 
 impl Default for ServerStateFile {
@@ -120,6 +135,7 @@ impl Default for ServerStateFile {
             tls_key_der_hex: None,
             bound_client_fingerprint: None,
             bound_server_fingerprint: None,
+            revoked_token_ids: Vec::new(),
         }
     }
 }
@@ -477,14 +493,26 @@ fn random_client_fingerprint() -> String {
     hex_of(&bytes)
 }
 
-fn issue_signed_jwt_token(state: &mut ServerStateFile) -> Result<TokenRecord> {
+fn issue_signed_jwt_token_with_policy(
+    state: &mut ServerStateFile,
+    scopes: Vec<String>,
+    remote_id: Option<String>,
+    ttl_seconds: Option<i64>,
+) -> Result<TokenRecord> {
     let now = Utc::now();
-    let exp = now + ChronoDuration::days(TOKEN_TTL_DAYS);
+    let exp = ttl_seconds
+        .map(|seconds| now + ChronoDuration::seconds(seconds.max(60)))
+        .unwrap_or_else(|| now + ChronoDuration::days(TOKEN_TTL_DAYS));
+    let token_id = random_client_fingerprint();
+    let rid = remote_id.clone().unwrap_or_default();
     let header = r#"{"alg":"EdDSA","typ":"JWT"}"#;
     let payload = JwtPayload {
         sub: "clavisvault-desktop".to_string(),
         iat: now.timestamp(),
         exp: exp.timestamp(),
+        jti: token_id.clone(),
+        scp: scopes.clone(),
+        rid: rid.clone(),
     };
 
     let header_b64 = URL_SAFE_NO_PAD.encode(header.as_bytes());
@@ -499,6 +527,9 @@ fn issue_signed_jwt_token(state: &mut ServerStateFile) -> Result<TokenRecord> {
     let record = TokenRecord {
         token,
         expires_at: exp,
+        token_id,
+        scopes,
+        remote_id,
     };
     state.token = Some(record.clone());
     Ok(record)
@@ -568,6 +599,14 @@ fn verify_token(state: &ServerStateFile, token: &str) -> Result<()> {
         bail!("token mismatch");
     }
     let payload = verify_jwt_signature(state, token)?;
+    if !payload.jti.is_empty()
+        && state
+            .revoked_token_ids
+            .iter()
+            .any(|jti| jti == &payload.jti)
+    {
+        bail!("token revoked");
+    }
     if payload.exp <= now.timestamp() {
         bail!("token payload expired");
     }
@@ -577,14 +616,42 @@ fn verify_token(state: &ServerStateFile, token: &str) -> Result<()> {
     Ok(())
 }
 
+fn verify_token_with_scope(
+    state: &ServerStateFile,
+    token: &str,
+    required_scope: &str,
+    remote_id: Option<&str>,
+) -> Result<()> {
+    verify_token(state, token)?;
+    let payload = verify_jwt_signature(state, token)?;
+    if !payload.scp.is_empty() && !payload.scp.iter().any(|scope| scope == required_scope) {
+        bail!("token scope denied for command");
+    }
+    if let Some(expected_remote) = remote_id
+        && !payload.rid.is_empty()
+        && payload.rid != expected_remote
+    {
+        bail!("token remote-id mismatch");
+    }
+    Ok(())
+}
+
+struct PairingPolicy<'a> {
+    required_scope: &'a str,
+    remote_id: Option<&'a str>,
+    scopes: Option<Vec<String>>,
+    session_ttl_seconds: Option<u64>,
+}
+
 fn verify_or_pair(
     state: &mut ServerStateFile,
     token: Option<&str>,
     pairing_code: Option<&str>,
     password: Option<&str>,
+    policy: PairingPolicy<'_>,
 ) -> Result<Option<String>> {
     if let Some(token) = token {
-        verify_token(state, token)?;
+        verify_token_with_scope(state, token, policy.required_scope, policy.remote_id)?;
         return Ok(None);
     }
 
@@ -615,7 +682,18 @@ fn verify_or_pair(
         }
     }
 
-    let issued = issue_signed_jwt_token(state)?;
+    let issued = issue_signed_jwt_token_with_policy(
+        state,
+        policy.scopes.unwrap_or_else(|| {
+            vec![
+                "push".to_string(),
+                "erase".to_string(),
+                "revoke".to_string(),
+            ]
+        }),
+        policy.remote_id.map(std::string::ToString::to_string),
+        policy.session_ttl_seconds.map(|ttl| ttl as i64),
+    )?;
     state.pairing = None;
     Ok(Some(issued.token))
 }
@@ -690,6 +768,13 @@ fn handle_vault_push(
 ) -> Result<PushResponse> {
     let command = request.command.as_deref().unwrap_or("").trim();
     validate_remote_command(command)?;
+    let required_scope = if command == REMOTE_COMMAND_ERASE {
+        "erase"
+    } else if command == REMOTE_COMMAND_REVOKE {
+        "revoke"
+    } else {
+        "push"
+    };
 
     if request.password.is_some() && request.token.is_some() {
         bail!("password must not be sent with an active session token");
@@ -702,16 +787,21 @@ fn handle_vault_push(
         bail!("missing password");
     }
 
+    let client_fingerprint = request.client_fingerprint.clone().ok_or_else(|| {
+        anyhow!("missing client fingerprint (server requires bound client identity")
+    })?;
     let issued_token = verify_or_pair(
         state,
         request.token.as_deref(),
         request.pairing_code.as_deref(),
         request.password.as_deref(),
+        PairingPolicy {
+            required_scope,
+            remote_id: Some(client_fingerprint.as_str()),
+            scopes: None,
+            session_ttl_seconds: None,
+        },
     )?;
-
-    let client_fingerprint = request.client_fingerprint.clone().ok_or_else(|| {
-        anyhow!("missing client fingerprint (server requires bound client identity")
-    })?;
     let allow_initial_bind = !has_session_token && request.pairing_code.is_some();
     let server_fingerprint = ensure_server_fingerprint_binding(
         state,
@@ -737,6 +827,22 @@ fn handle_vault_push(
             ack_sha256: "erased".to_string(),
             server_fingerprint: Some(server_fingerprint),
             issued_token,
+        });
+    }
+
+    if command == REMOTE_COMMAND_REVOKE {
+        if let Some(token) = request.token.as_deref()
+            && let Ok(payload) = verify_jwt_signature(state, token)
+            && !payload.jti.is_empty()
+            && !state.revoked_token_ids.iter().any(|id| id == &payload.jti)
+        {
+            state.revoked_token_ids.push(payload.jti);
+        }
+        state.token = None;
+        return Ok(PushResponse {
+            ack_sha256: "revoked".to_string(),
+            server_fingerprint: Some(server_fingerprint),
+            issued_token: None,
         });
     }
 
@@ -1163,11 +1269,33 @@ mod tests {
         let challenge = ensure_pairing_challenge(&mut state);
         let code = format!("{}-{}", challenge.code, challenge.checksum);
 
-        let first = verify_or_pair(&mut state, None, Some(&code), None);
+        let first = verify_or_pair(
+            &mut state,
+            None,
+            Some(&code),
+            None,
+            PairingPolicy {
+                required_scope: "push",
+                remote_id: None,
+                scopes: None,
+                session_ttl_seconds: None,
+            },
+        );
         assert!(first.is_ok());
         assert!(state.pairing.is_none());
 
-        let second = verify_or_pair(&mut state, None, Some(&code), None);
+        let second = verify_or_pair(
+            &mut state,
+            None,
+            Some(&code),
+            None,
+            PairingPolicy {
+                required_scope: "push",
+                remote_id: None,
+                scopes: None,
+                session_ttl_seconds: None,
+            },
+        );
         assert!(second.is_err());
     }
 
@@ -1185,7 +1313,18 @@ mod tests {
 
         let challenge = ensure_pairing_challenge(&mut state);
         let code = format!("{}-{}", challenge.code, challenge.checksum);
-        let result = verify_or_pair(&mut state, None, Some(&code), None);
+        let result = verify_or_pair(
+            &mut state,
+            None,
+            Some(&code),
+            None,
+            PairingPolicy {
+                required_scope: "push",
+                remote_id: None,
+                scopes: None,
+                session_ttl_seconds: None,
+            },
+        );
         assert!(result.is_err());
         assert!(state.pairing.is_some());
     }
@@ -1204,7 +1343,18 @@ mod tests {
 
         let challenge = ensure_pairing_challenge(&mut state);
         let code = format!("{}-{}", challenge.code, challenge.checksum);
-        let result = verify_or_pair(&mut state, None, Some(&code), Some(password));
+        let result = verify_or_pair(
+            &mut state,
+            None,
+            Some(&code),
+            Some(password),
+            PairingPolicy {
+                required_scope: "push",
+                remote_id: None,
+                scopes: None,
+                session_ttl_seconds: None,
+            },
+        );
         assert!(matches!(result, Ok(Some(_))));
         assert!(state.pairing.is_none());
     }
@@ -1266,7 +1416,17 @@ mod tests {
     #[test]
     fn issued_token_is_eddsa_signed_jwt() {
         let mut state = ServerStateFile::default();
-        let record = issue_signed_jwt_token(&mut state).expect("token issuance should work");
+        let record = issue_signed_jwt_token_with_policy(
+            &mut state,
+            vec![
+                "push".to_string(),
+                "erase".to_string(),
+                "revoke".to_string(),
+            ],
+            None,
+            None,
+        )
+        .expect("token issuance should work");
 
         let parts: Vec<&str> = record.token.split('.').collect();
         assert_eq!(parts.len(), 3);
@@ -1898,10 +2058,23 @@ mod tests {
     #[test]
     fn expired_session_token_is_rejected() {
         let mut state = ServerStateFile::default();
-        let token_record = issue_signed_jwt_token(&mut state).expect("issue token should work");
+        let token_record = issue_signed_jwt_token_with_policy(
+            &mut state,
+            vec![
+                "push".to_string(),
+                "erase".to_string(),
+                "revoke".to_string(),
+            ],
+            None,
+            None,
+        )
+        .expect("issue token should work");
         state.token = Some(TokenRecord {
             token: token_record.token,
             expires_at: Utc::now() - ChronoDuration::seconds(1),
+            token_id: token_record.token_id,
+            scopes: token_record.scopes,
+            remote_id: token_record.remote_id,
         });
 
         assert!(

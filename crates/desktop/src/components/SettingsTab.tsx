@@ -11,6 +11,7 @@ interface SettingsTabProps {
   onSave: (settings: DesktopSettings) => Promise<void>;
   onChangeMasterPassword: (currentPassword: string, newPassword: string) => Promise<void>;
   onCheckUpdates: () => Promise<void>;
+  onRunRecoveryDrill?: () => Promise<void>;
   shellHooks: Record<string, string>;
 }
 
@@ -22,6 +23,7 @@ export function SettingsTab({
   onSave,
   onChangeMasterPassword,
   onCheckUpdates,
+  onRunRecoveryDrill,
   shellHooks,
 }: SettingsTabProps) {
   const [currentPassword, setCurrentPassword] = useState("");
@@ -62,6 +64,13 @@ export function SettingsTab({
             className="inline-flex items-center gap-2 rounded-lg border border-accent/25 bg-surface/70 px-3 py-2 text-sm text-text transition hover:border-accent/50"
           >
             <Sparkles className="h-4 w-4 text-accent/70" /> Check Updates
+          </button>
+          <button
+            type="button"
+            onClick={() => void onRunRecoveryDrill?.()}
+            className="inline-flex items-center gap-2 rounded-lg border border-accent/25 bg-surface/70 px-3 py-2 text-sm text-text transition hover:border-accent/50"
+          >
+            Run Recovery Drill
           </button>
         </div>
       </GlassCard>
@@ -141,6 +150,15 @@ export function SettingsTab({
               onChange={(event) => update({ biometricEnabled: event.target.checked })}
             />
             Biometric unlock {biometricAvailable ? "available" : "not available"}
+          </label>
+
+          <label className="inline-flex items-center gap-2 rounded-lg border border-accent/10 bg-surface/50 px-3 py-2 text-sm text-text/85">
+            <input
+              type="checkbox"
+              checked={settings.hardwareBackedUnlockEnabled}
+              onChange={(event) => update({ hardwareBackedUnlockEnabled: event.target.checked })}
+            />
+            Hardware-backed unlock (best effort)
           </label>
 
           <label className="inline-flex items-center gap-2 rounded-lg border border-accent/10 bg-surface/50 px-3 py-2 text-sm text-text/85">

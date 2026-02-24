@@ -258,6 +258,30 @@ Security Invariants (audited in every CI run)
 1. No plaintext ever written to disk.
 2. Master key never persisted.
 3. Every file touch is backed up first.
+
+## 9. Post-v1 Security and Operations Enhancements
+- Vault schema version is now `2` and supports backward migration from `v1` on successful unlock.
+- `KeyEntry` now includes rotation metadata:
+  - `created_at`, `expires_at`, `rotation_period_days`, `warn_before_days`, `last_rotated_at`, `owner`
+- Export manifest format `v2` is signed and includes:
+  - `payload_sha256`, `key_count`, `vault_version`, `signer_key_id`, `signer_public_key`, `signature`
+- Desktop settings include `hardwareBackedUnlockEnabled` and alert acknowledgement state.
+- Tamper-evident audit chain verification command is exposed to desktop and CLI.
+- New desktop commands:
+  - `verify_audit_chain`
+  - `list_rotation_findings`
+  - `rotate_key`
+  - `revoke_remote_session`
+  - `run_recovery_drill`
+  - `acknowledge_alert`
+- New CLI commands:
+  - `policy check`
+  - `audit verify`
+  - `recovery-drill`
+  - `rotate-key`
+- Remote trust policy metadata is tracked per remote:
+  - `permissions`, `session_ttl_seconds`, `revoked_at`, `requires_repairing`
+- Server token payload now carries `jti`, `scp`, and `rid`; server validates scope and supports explicit session revoke command.
 4. Only guarded sections in agents.md / openclaw.json are modified.
 5. Relay cannot read any traffic.
 6. Desktop has zero network except updater & P2P tunnel (firewall-friendly), and webview CSP connect-src is limited to `'self'` with no wildcard or scheme-wide sources.

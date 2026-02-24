@@ -10,7 +10,7 @@ use chrono::{DateTime, Utc};
 use rand::rngs::OsRng;
 use zeroize::Zeroize;
 
-use crate::types::{EncryptedHeader, EncryptedVault, MasterKey, VaultData};
+use crate::types::{EncryptedHeader, EncryptedVault, MasterKey, VaultData, migrate_vault_data};
 
 const ARGON2_MEMORY_KIB: u32 = 19_456;
 const ARGON2_TIME_COST: u32 = 4;
@@ -95,7 +95,9 @@ pub fn lock_vault(
     vault: &VaultData,
     master_key: &MasterKey,
 ) -> Result<EncryptedVault> {
-    let serialized = rmp_serde::to_vec(vault).context("failed to serialize vault data")?;
+    let mut normalized = vault.clone();
+    migrate_vault_data(&mut normalized);
+    let serialized = rmp_serde::to_vec(&normalized).context("failed to serialize vault data")?;
     let mut nonce = [0_u8; 12];
     OsRng.fill_bytes(&mut nonce);
 
@@ -112,9 +114,9 @@ pub fn lock_vault(
     Ok(EncryptedVault {
         path: path.into(),
         header: EncryptedHeader {
-            version: vault.version,
+            version: normalized.version,
             nonce,
-            salt: vault.salt,
+            salt: normalized.salt,
         },
         ciphertext,
     })
@@ -135,7 +137,9 @@ pub fn unlock_vault(encrypted: &EncryptedVault, master_key: &MasterKey) -> Resul
 
     plaintext.zeroize();
 
-    decoded.context("failed to decode decrypted vault data")
+    let mut decoded = decoded.context("failed to decode decrypted vault data")?;
+    migrate_vault_data(&mut decoded);
+    Ok(decoded)
 }
 
 pub fn unlock_with_password_or_biometric(
@@ -200,6 +204,12 @@ mod tests {
                 secret: None,
                 tags: vec!["test".to_string()],
                 last_updated: Utc::now(),
+                created_at: Utc::now(),
+                expires_at: None,
+                rotation_period_days: None,
+                warn_before_days: None,
+                last_rotated_at: Some(Utc::now()),
+                owner: Some("test".to_string()),
             },
         );
         vault

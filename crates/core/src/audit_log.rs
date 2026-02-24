@@ -1,6 +1,8 @@
 use chrono::{DateTime, Duration, Utc};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AuditOperation {
     Unlock,
     Lock,
@@ -12,7 +14,7 @@ pub enum AuditOperation {
     FailedUnlock,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditEntry {
     pub operation: AuditOperation,
     pub target: Option<String>,
@@ -20,10 +22,43 @@ pub struct AuditEntry {
     pub at: DateTime<Utc>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuditChainEntry {
+    pub index: u64,
+    pub operation: String,
+    pub target: Option<String>,
+    pub detail: String,
+    pub at: DateTime<Utc>,
+    pub prev_hash_hex: String,
+    pub hash_hex: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuditCheckpoint {
+    pub index: u64,
+    pub at: DateTime<Utc>,
+    pub hash_hex: String,
+    pub signature: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuditLedger {
+    pub entries: Vec<AuditChainEntry>,
+    pub checkpoints: Vec<AuditCheckpoint>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AuditIntegrityStatus {
+    Valid,
+    Invalid { index: u64, reason: String },
+}
+
 #[derive(Clone, Debug)]
 pub struct AuditLog {
     entries: Vec<AuditEntry>,
+    ledger: AuditLedger,
     max_entries: usize,
+    checkpoint_every: usize,
 }
 
 impl Default for AuditLog {
@@ -36,7 +71,9 @@ impl AuditLog {
     pub fn new(max_entries: usize) -> Self {
         Self {
             entries: Vec::new(),
+            ledger: AuditLedger::default(),
             max_entries,
+            checkpoint_every: 128,
         }
     }
 
@@ -46,12 +83,53 @@ impl AuditLog {
         target: Option<String>,
         detail: impl Into<String>,
     ) {
+        let detail = detail.into();
+        let now = Utc::now();
         self.entries.push(AuditEntry {
-            operation,
-            target,
-            detail: detail.into(),
-            at: Utc::now(),
+            operation: operation.clone(),
+            target: target.clone(),
+            detail: detail.clone(),
+            at: now,
         });
+
+        let index = self.ledger.entries.len() as u64;
+        let prev_hash_hex = self
+            .ledger
+            .entries
+            .last()
+            .map(|entry| entry.hash_hex.clone())
+            .unwrap_or_else(|| "0".repeat(64));
+        let hash_hex = chain_hash(
+            index,
+            now,
+            &operation,
+            target.as_deref(),
+            &detail,
+            &prev_hash_hex,
+        );
+        self.ledger.entries.push(AuditChainEntry {
+            index,
+            operation: format!("{operation:?}"),
+            target,
+            detail,
+            at: now,
+            prev_hash_hex: prev_hash_hex.clone(),
+            hash_hex: hash_hex.clone(),
+        });
+
+        if self
+            .ledger
+            .entries
+            .len()
+            .is_multiple_of(self.checkpoint_every)
+        {
+            self.ledger.checkpoints.push(AuditCheckpoint {
+                index,
+                at: now,
+                hash_hex,
+                signature: None,
+            });
+        }
 
         if self.entries.len() > self.max_entries {
             let overflow = self.entries.len() - self.max_entries;
@@ -62,6 +140,83 @@ impl AuditLog {
     pub fn entries(&self) -> &[AuditEntry] {
         &self.entries
     }
+
+    pub fn ledger(&self) -> &AuditLedger {
+        &self.ledger
+    }
+
+    pub fn verify_integrity(&self) -> AuditIntegrityStatus {
+        verify_ledger_integrity(&self.ledger)
+    }
+}
+
+pub fn verify_ledger_integrity(ledger: &AuditLedger) -> AuditIntegrityStatus {
+    let mut previous = "0".repeat(64);
+    for entry in &ledger.entries {
+        let recomputed = chain_hash(
+            entry.index,
+            entry.at,
+            match entry.operation.as_str() {
+                "Unlock" => &AuditOperation::Unlock,
+                "Lock" => &AuditOperation::Lock,
+                "Copy" => &AuditOperation::Copy,
+                "Push" => &AuditOperation::Push,
+                "FileUpdate" => &AuditOperation::FileUpdate,
+                "AutoLock" => &AuditOperation::AutoLock,
+                "BiometricUnlock" => &AuditOperation::BiometricUnlock,
+                "FailedUnlock" => &AuditOperation::FailedUnlock,
+                _ => {
+                    return AuditIntegrityStatus::Invalid {
+                        index: entry.index,
+                        reason: "unknown operation variant in chain".to_string(),
+                    };
+                }
+            },
+            entry.target.as_deref(),
+            &entry.detail,
+            &entry.prev_hash_hex,
+        );
+
+        if entry.prev_hash_hex != previous {
+            return AuditIntegrityStatus::Invalid {
+                index: entry.index,
+                reason: "previous hash link mismatch".to_string(),
+            };
+        }
+        if entry.hash_hex != recomputed {
+            return AuditIntegrityStatus::Invalid {
+                index: entry.index,
+                reason: "entry hash mismatch".to_string(),
+            };
+        }
+        previous = entry.hash_hex.clone();
+    }
+    AuditIntegrityStatus::Valid
+}
+
+fn chain_hash(
+    index: u64,
+    at: DateTime<Utc>,
+    operation: &AuditOperation,
+    target: Option<&str>,
+    detail: &str,
+    prev_hash_hex: &str,
+) -> String {
+    let line = format!(
+        "{}|{}|{:?}|{}|{}|{}",
+        index,
+        at.to_rfc3339(),
+        operation,
+        target.unwrap_or(""),
+        detail,
+        prev_hash_hex
+    );
+    let digest = Sha256::digest(line.as_bytes());
+    let mut out = String::with_capacity(digest.len() * 2);
+    for b in digest {
+        out.push_str(&format!("{b:02x}"));
+    }
+    out
 }
 
 #[derive(Clone, Debug)]
@@ -105,6 +260,7 @@ mod tests {
 
         assert_eq!(log.entries().len(), 3);
         assert_eq!(log.entries()[0].operation, AuditOperation::Copy);
+        assert_eq!(log.ledger().entries.len(), 4);
     }
 
     #[test]
@@ -141,5 +297,6 @@ mod tests {
         assert_eq!(entry.operation, AuditOperation::FileUpdate);
         assert_eq!(entry.target.as_deref(), Some("agents.md"));
         assert_eq!(entry.detail, "updated managed section");
+        assert_eq!(log.verify_integrity(), AuditIntegrityStatus::Valid);
     }
 }

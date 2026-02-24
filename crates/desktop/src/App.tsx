@@ -417,6 +417,15 @@ export default function App() {
                     setLastActionMessage(String(error));
                   }
                 }}
+                onRotate={async (name) => {
+                  const next = await api.rotateKey({ name });
+                  setSummary(next);
+                  await Promise.all([
+                    queryClient.invalidateQueries({ queryKey: ["keys"] }),
+                    queryClient.invalidateQueries({ queryKey: ["audit"] }),
+                  ]);
+                  setLastActionMessage(`Rotated ${name}.`);
+                }}
                 onExport={async (passphrase, path) => {
                   const writtenPath = await api.exportVault(passphrase, path);
                   setLastActionMessage(`Exported vault to ${writtenPath}.`);
@@ -469,6 +478,12 @@ export default function App() {
                   await queryClient.invalidateQueries({ queryKey: ["audit"] });
                   setLastActionMessage("Removed remote and requested remote erase.");
                 }}
+                onRevokeRemoteSession={async (remoteId) => {
+                  const latest = await api.revokeRemoteSession(remoteId);
+                  setRemotes(latest);
+                  await queryClient.invalidateQueries({ queryKey: ["audit"] });
+                  setLastActionMessage("Revoked remote session.");
+                }}
               />
             ) : null}
 
@@ -490,6 +505,15 @@ export default function App() {
                   setLastActionMessage("Master password changed.");
                 }}
                 onCheckUpdates={checkUpdates}
+                onRunRecoveryDrill={async () => {
+                  const report = await api.runRecoveryDrill();
+                  setLastActionMessage(
+                    report.success
+                      ? "Recovery drill passed."
+                      : "Recovery drill completed with failures.",
+                  );
+                  await queryClient.invalidateQueries({ queryKey: ["audit"] });
+                }}
                 shellHooks={hooksQuery.data ?? {}}
               />
             ) : null}
