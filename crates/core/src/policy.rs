@@ -203,9 +203,23 @@ fn pattern_matches(pattern: &str, value: &str) -> bool {
 mod tests {
     use chrono::{Duration, Utc};
     use std::collections::HashMap;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{SecretPolicy, SecretPolicyRule, pattern_matches, validate_vault_policy};
+    use super::{
+        SecretPolicy, SecretPolicyRule, load_policy, pattern_matches, validate_vault_policy,
+    };
     use crate::types::{KeyEntry, VaultData};
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after unix epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("clavisvault-core-{name}-{nanos}"));
+        fs::create_dir_all(&path).expect("temp dir creation should work");
+        path
+    }
 
     fn key_entry(
         name: &str,
@@ -263,6 +277,144 @@ mod tests {
 
         let violations = validate_vault_policy(&vault, &policy, Utc::now());
         assert!(violations.iter().any(|v| v.code == "missing_tags"));
+    }
+
+    #[test]
+    fn load_policy_reads_file() {
+        let dir = temp_dir("policy-load-success");
+        let policy_path = dir.join("policy.toml");
+        fs::write(
+            &policy_path,
+            r#"
+defaultRotationPeriodDays = 42
+defaultWarnBeforeDays = 14
+
+[[rules]]
+pattern = "API_*"
+require_description = true
+require_tags = true
+require_owner = false
+require_expiry = false
+max_age_days = 30
+"#,
+        )
+        .expect("seed policy file should write");
+
+        let policy = load_policy(&policy_path).expect("policy should load");
+        assert_eq!(policy.default_rotation_period_days, Some(42));
+        assert_eq!(policy.default_warn_before_days, Some(14));
+        assert_eq!(policy.rules.len(), 1);
+        assert_eq!(policy.rules[0].pattern, "API_*");
+    }
+
+    #[test]
+    fn load_policy_reports_missing_file() {
+        let dir = temp_dir("policy-load-missing");
+        let missing = dir.join("missing.toml");
+
+        let err = load_policy(&missing).expect_err("load should fail for missing file");
+        assert!(err.to_string().contains("failed reading policy file"));
+    }
+
+    #[test]
+    fn load_policy_reports_toml_parse_error() {
+        let dir = temp_dir("policy-load-parse-error");
+        let policy_path = dir.join("bad-policy.toml");
+        fs::write(&policy_path, "this isn't toml").expect("seed invalid toml policy should write");
+
+        let err = load_policy(&policy_path).expect_err("load should fail for malformed toml");
+        assert!(err.to_string().contains("failed parsing policy file"));
+    }
+
+    #[test]
+    fn validate_rule_checks_missing_description_owner_and_expiry() {
+        let mut keys = HashMap::new();
+        keys.insert(
+            "CREDS".to_string(),
+            KeyEntry {
+                name: "CREDS".to_string(),
+                description: "".to_string(),
+                tags: vec!["".to_string()],
+                last_updated: Utc::now(),
+                created_at: Utc::now(),
+                expires_at: None,
+                rotation_period_days: None,
+                warn_before_days: None,
+                last_rotated_at: Some(Utc::now()),
+                owner: None,
+                secret: Some("value".to_string()),
+            },
+        );
+        let vault = VaultData {
+            version: 2,
+            salt: [3u8; 16],
+            keys,
+        };
+        let policy = SecretPolicy {
+            default_rotation_period_days: None,
+            default_warn_before_days: None,
+            rules: vec![SecretPolicyRule {
+                pattern: "C*".to_string(),
+                require_description: true,
+                require_tags: false,
+                require_owner: true,
+                require_expiry: true,
+                max_age_days: None,
+            }],
+        };
+
+        let violations = validate_vault_policy(&vault, &policy, Utc::now());
+        let codes: Vec<_> = violations.into_iter().map(|v| v.code).collect();
+        assert!(codes.contains(&"missing_description".to_string()));
+        assert!(codes.contains(&"missing_owner".to_string()));
+        assert!(codes.contains(&"missing_expiry".to_string()));
+    }
+
+    #[test]
+    fn validate_rule_uses_creation_anchor_when_last_rotated_is_missing() {
+        let mut keys = HashMap::new();
+        let now = Utc::now();
+        keys.insert(
+            "ROTATION".to_string(),
+            KeyEntry {
+                name: "ROTATION".to_string(),
+                description: "secret".to_string(),
+                tags: vec!["ops".to_string()],
+                last_updated: now - Duration::days(3),
+                created_at: now - Duration::days(40),
+                expires_at: Some(now - Duration::days(1)),
+                rotation_period_days: None,
+                warn_before_days: None,
+                last_rotated_at: None,
+                owner: Some("team".to_string()),
+                secret: Some("token".to_string()),
+            },
+        );
+        let vault = VaultData {
+            version: 2,
+            salt: [4u8; 16],
+            keys,
+        };
+        let policy = SecretPolicy {
+            default_rotation_period_days: None,
+            default_warn_before_days: None,
+            rules: vec![SecretPolicyRule {
+                pattern: "*".to_string(),
+                require_description: false,
+                require_tags: false,
+                require_owner: false,
+                require_expiry: false,
+                max_age_days: Some(7),
+            }],
+        };
+        let violations = validate_vault_policy(&vault, &policy, now);
+        assert!(violations.iter().any(|v| v.code == "max_age_exceeded"));
+    }
+
+    #[test]
+    fn pattern_matches_exact_match_is_true_for_non_wildcard_pattern() {
+        assert!(pattern_matches("EXACT", "EXACT"));
+        assert!(!pattern_matches("exact", "EXACT"));
     }
 
     #[test]

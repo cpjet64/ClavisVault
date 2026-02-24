@@ -223,6 +223,32 @@ mod tests {
     }
 
     #[test]
+    fn shell_hook_generation_covers_all_shell_types() {
+        let hooks = generate_all_hooks();
+        assert_eq!(
+            hooks[&ShellKind::Bash],
+            "# ClavisVault bash hook\nclavis_env_load() {\n  command clavis env-load \"$@\"\n}\nalias clvload='clavis_env_load'"
+        );
+        assert_eq!(
+            hooks[&ShellKind::Zsh],
+            "# ClavisVault zsh hook\nclavis_env_load() {\n  command clavis env-load \"$@\"\n}\nalias clvload='clavis_env_load'"
+        );
+        assert_eq!(
+            hooks[&ShellKind::Fish],
+            "# ClavisVault fish hook\nfunction clavis_env_load\n  clavis env-load $argv\nend\nalias clvload clavis_env_load"
+        );
+        assert_eq!(
+            hooks[&ShellKind::Pwsh],
+            "# ClavisVault pwsh hook\nfunction Invoke-ClavisEnvLoad {\n  clavis env-load @args\n}\nSet-Alias clvload Invoke-ClavisEnvLoad"
+        );
+    }
+
+    #[test]
+    fn shell_safe_pwsh_single_quote_escapes_apostrophes() {
+        assert_eq!(shell_safe_pwsh_single_quote("va'lue"), "'va''lue'");
+    }
+
+    #[test]
     fn shell_session_token_file_snippets_hide_secret() {
         let snippets = shell_session_token_file_snippets(
             ShellKind::Bash,
@@ -238,6 +264,37 @@ mod tests {
             snippets
                 .iter()
                 .all(|snippet| !snippet.contains("CLAVISVAULT_SESSION_TOKEN='"))
+        );
+    }
+
+    #[test]
+    fn shell_session_token_file_snippets_cover_all_shells() {
+        let fish = shell_session_token_file_snippets(
+            ShellKind::Fish,
+            "/tmp/fish-token",
+            "/tmp/fish-vault.cv",
+        );
+        assert_eq!(
+            fish[0],
+            "set -gx CLAVISVAULT_SESSION_TOKEN_FILE '/tmp/fish-token'"
+        );
+        assert_eq!(
+            fish[1],
+            "set -gx CLAVISVAULT_VAULT_PATH '/tmp/fish-vault.cv'"
+        );
+
+        let pwsh = shell_session_token_file_snippets(
+            ShellKind::Pwsh,
+            "/tmp/pwsh-token",
+            "C:\\tmp\\pwsh-vault.cv",
+        );
+        assert_eq!(
+            pwsh[0],
+            "$env:CLAVISVAULT_SESSION_TOKEN_FILE = '/tmp/pwsh-token'"
+        );
+        assert_eq!(
+            pwsh[1],
+            "$Env:CLAVISVAULT_VAULT_PATH = 'C:\\tmp\\pwsh-vault.cv'"
         );
     }
 }

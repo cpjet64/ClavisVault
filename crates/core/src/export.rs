@@ -356,6 +356,7 @@ fn ensure_export_passphrase(passphrase: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use chrono::Utc;
+    use ed25519_dalek::SigningKey;
 
     use super::*;
     use crate::types::{ExportLegacyMode, ExportSignerTrustPolicy, KeyEntry, VaultData};
@@ -547,6 +548,148 @@ mod tests {
     }
 
     #[test]
+    fn decrypt_export_rejects_unknown_manifest_version() {
+        let vault = VaultData::new([17; 16]);
+        let original = encrypt_export(&vault, "export-passphrase").expect("export should work");
+        let mut archive = ZipArchive::new(Cursor::new(original)).expect("parse archive");
+        let manifest_json = {
+            let mut manifest_file = archive
+                .by_name_decrypt(EXPORT_MANIFEST_PATH, "export-passphrase".as_bytes())
+                .expect("read manifest");
+            let mut manifest_json = Vec::new();
+            manifest_file
+                .read_to_end(&mut manifest_json)
+                .expect("manifest read");
+            manifest_json
+        };
+        let payload = {
+            let mut payload_file = archive
+                .by_name_decrypt(EXPORT_PAYLOAD_PATH, "export-passphrase".as_bytes())
+                .expect("read payload");
+            let mut payload = Vec::new();
+            payload_file
+                .read_to_end(&mut payload)
+                .expect("payload read");
+            payload
+        };
+
+        let mut manifest: EncryptedExportManifestV2 =
+            serde_json::from_slice(&manifest_json).expect("manifest decode");
+        manifest.version = EXPORT_FORMAT_VERSION + 1;
+
+        let passphrase_owned = Zeroizing::new("export-passphrase".to_string());
+        let options = SimpleFileOptions::default()
+            .compression_method(CompressionMethod::Deflated)
+            .with_aes_encryption(AesMode::Aes256, passphrase_owned.as_str());
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        writer
+            .start_file(EXPORT_MANIFEST_PATH, options)
+            .expect("start manifest");
+        writer
+            .write_all(&serde_json::to_vec(&manifest).expect("serialize manifest"))
+            .expect("write manifest");
+        writer
+            .start_file(EXPORT_PAYLOAD_PATH, options)
+            .expect("start payload");
+        writer.write_all(&payload).expect("write payload");
+        let encoded = writer.finish().expect("finish archive").into_inner();
+
+        let err = decrypt_export_with_metadata(&encoded, "export-passphrase")
+            .expect_err("unsupported format should fail");
+        assert!(
+            err.to_string()
+                .contains("unsupported export format version")
+        );
+    }
+
+    #[test]
+    fn decrypt_export_rejects_unknown_legacy_manifest_version() {
+        let vault = VaultData::new([18; 16]);
+        let payload = serde_json::to_vec(&vault).expect("serialize");
+        let manifest = serde_json::to_vec(&serde_json::json!({
+            "version": 99,
+            "created_at": Utc::now().to_rfc3339(),
+        }))
+        .expect("legacy manifest serialize");
+        let passphrase_owned = Zeroizing::new("export-passphrase".to_string());
+        let options = SimpleFileOptions::default()
+            .compression_method(CompressionMethod::Deflated)
+            .with_aes_encryption(AesMode::Aes256, passphrase_owned.as_str());
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        writer
+            .start_file(EXPORT_MANIFEST_PATH, options)
+            .expect("start manifest");
+        writer.write_all(&manifest).expect("write manifest");
+        writer
+            .start_file(EXPORT_PAYLOAD_PATH, options)
+            .expect("start payload");
+        writer.write_all(&payload).expect("write payload");
+        let encoded = writer.finish().expect("finish zip").into_inner();
+
+        let err = decrypt_export_with_metadata(&encoded, "export-passphrase")
+            .expect_err("invalid legacy version should fail");
+        assert!(
+            err.to_string()
+                .contains("unsupported export format version")
+        );
+    }
+
+    #[test]
+    fn decrypt_export_trust_flags_reports_key_mismatch() {
+        let vault = VaultData::new([19; 16]);
+        let signing_key = hex_of(&{
+            let mut bytes = [0_u8; EXPORT_SIGNING_KEY_LEN];
+            bytes[0] = 9;
+            bytes
+        });
+        let encoded = encrypt_export_with_signing_key(&vault, "export-passphrase", &signing_key)
+            .expect("export should write");
+        let decoded = decrypt_export_with_metadata(&encoded, "export-passphrase").expect("decrypt");
+        let metadata = decoded.metadata;
+        let key_id = metadata
+            .signer_key_id
+            .clone()
+            .expect("decoded metadata should include signer_key_id");
+
+        let mut policy = ExportSignerTrustPolicy::default();
+        policy.record_trusted_signer(
+            key_id,
+            "0badcafebadcafebadcafebadcafebadcafebadcafebadcafebadcafebadcafebadc".to_string(),
+        );
+        let trust = evaluate_export_signer_trust(&metadata, &policy).expect("trust eval");
+        assert_eq!(trust, ExportSignerTrust::Mismatch);
+    }
+
+    #[test]
+    fn enforce_export_legacy_import_policy_allow_is_permitted() {
+        let metadata = DecryptedExportMetadata {
+            legacy_manifest: true,
+            signer_key_id: None,
+            signer_public_key: None,
+            payload_sha256: "payload".to_string(),
+        };
+        let policy = ExportSignerTrustPolicy {
+            legacy_import_mode: ExportLegacyMode::Allow,
+            ..ExportSignerTrustPolicy::default()
+        };
+        assert!(enforce_export_legacy_import_policy(&metadata, &policy).expect("allow check"));
+    }
+
+    #[test]
+    fn enforce_export_legacy_import_policy_skips_non_legacy_manifests() {
+        let metadata = DecryptedExportMetadata {
+            legacy_manifest: false,
+            signer_key_id: Some("id".to_string()),
+            signer_public_key: Some("key".to_string()),
+            payload_sha256: "payload".to_string(),
+        };
+        assert!(
+            !enforce_export_legacy_import_policy(&metadata, &ExportSignerTrustPolicy::default())
+                .expect("should skip non-legacy")
+        );
+    }
+
+    #[test]
     fn tampered_signature_rejects_import() {
         let vault = VaultData::new([14; 16]);
         let encoded = encrypt_export(&vault, "export-passphrase").expect("export should work");
@@ -670,5 +813,135 @@ mod tests {
             Some(id_b.as_str())
         );
         assert_eq!(trust_b, ExportSignerTrust::Trusted);
+    }
+
+    #[test]
+    fn decrypt_export_rejects_key_count_mismatch() {
+        let signing_key = [4_u8; EXPORT_SIGNING_KEY_LEN];
+        let signing_key_hex = hex_of(&signing_key);
+        let vault = VaultData::new([20; 16]);
+        let mut encoded =
+            encrypt_export_with_signing_key(&vault, "export-passphrase", &signing_key_hex)
+                .expect("export should work");
+
+        let mut archive =
+            ZipArchive::new(Cursor::new(std::mem::take(&mut encoded))).expect("archive parse");
+        let mut manifest_json = Vec::new();
+        {
+            let mut manifest = archive
+                .by_name_decrypt(EXPORT_MANIFEST_PATH, "export-passphrase".as_bytes())
+                .expect("manifest open");
+            manifest
+                .read_to_end(&mut manifest_json)
+                .expect("manifest read");
+        }
+
+        let mut manifest: EncryptedExportManifestV2 =
+            serde_json::from_slice(&manifest_json).expect("manifest decode");
+        manifest.key_count = manifest.key_count.saturating_add(1);
+        let signing_key = SigningKey::from_bytes(&signing_key);
+        let signing_input = manifest_signing_input(
+            manifest.version,
+            manifest.created_at,
+            &manifest.payload_sha256,
+            manifest.key_count,
+            manifest.vault_version,
+            &manifest.signer_key_id,
+            &manifest.signer_public_key,
+        );
+        manifest.signature = URL_SAFE_NO_PAD.encode(
+            signing_key
+                .sign(signing_input.as_bytes())
+                .to_bytes()
+                .as_slice(),
+        );
+
+        let mut payload = Vec::new();
+        archive
+            .by_name_decrypt(EXPORT_PAYLOAD_PATH, "export-passphrase".as_bytes())
+            .expect("payload open")
+            .read_to_end(&mut payload)
+            .expect("payload read");
+
+        let options = SimpleFileOptions::default()
+            .compression_method(CompressionMethod::Deflated)
+            .with_aes_encryption(AesMode::Aes256, "export-passphrase");
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        writer
+            .start_file(EXPORT_MANIFEST_PATH, options)
+            .expect("start manifest");
+        writer
+            .write_all(&serde_json::to_vec(&manifest).expect("serialize manifest"))
+            .expect("rewrite manifest");
+        writer
+            .start_file(EXPORT_PAYLOAD_PATH, options)
+            .expect("start payload");
+        writer.write_all(&payload).expect("write payload");
+        let rewritten = writer.finish().expect("finish archive");
+
+        let err = decrypt_export(&rewritten.into_inner(), "export-passphrase")
+            .expect_err("key-count mismatch must fail");
+        assert!(err.to_string().contains("key-count mismatch"));
+    }
+
+    #[test]
+    fn evaluate_export_signer_trust_requires_signer_metadata() {
+        let metadata = DecryptedExportMetadata {
+            legacy_manifest: false,
+            signer_key_id: None,
+            signer_public_key: Some("pub".to_string()),
+            payload_sha256: "00".to_string(),
+        };
+        let err = evaluate_export_signer_trust(&metadata, &ExportSignerTrustPolicy::default())
+            .expect_err("missing signer key id should fail");
+        assert!(err.to_string().contains("missing signer_key_id"));
+
+        let metadata = DecryptedExportMetadata {
+            legacy_manifest: false,
+            signer_key_id: Some("id".to_string()),
+            signer_public_key: None,
+            payload_sha256: "00".to_string(),
+        };
+        let err = evaluate_export_signer_trust(&metadata, &ExportSignerTrustPolicy::default())
+            .expect_err("missing signer public key should fail");
+        assert!(err.to_string().contains("missing signer_public_key"));
+    }
+
+    #[test]
+    fn evaluate_export_signer_trust_returns_mismatch_when_tofu_changed() {
+        let mut metadata = DecryptedExportMetadata {
+            legacy_manifest: false,
+            signer_key_id: Some("id-1".to_string()),
+            signer_public_key: Some("pub-1".to_string()),
+            payload_sha256: "payload".to_string(),
+        };
+        let mut policy = ExportSignerTrustPolicy::default();
+        policy.record_trusted_signer("id-1".to_string(), "pub-2".to_string());
+
+        assert_eq!(
+            evaluate_export_signer_trust(&metadata, &policy).expect("trust compute"),
+            ExportSignerTrust::Mismatch
+        );
+
+        metadata.signer_public_key = Some("pub-2".to_string());
+        assert_eq!(
+            evaluate_export_signer_trust(&metadata, &policy).expect("trust compute"),
+            ExportSignerTrust::Trusted
+        );
+    }
+
+    #[test]
+    fn signer_from_private_key_hex_rejects_invalid_material() {
+        let err = signer_from_private_key_hex("00").expect_err("invalid signing key should fail");
+        assert!(
+            err.to_string()
+                .contains("invalid export signing key length")
+        );
+
+        let err = hex_decode("0").expect_err("odd-length hash should fail");
+        assert!(err.to_string().contains("hex payload has odd length"));
+
+        let err = hex_decode("zz").expect_err("invalid hex bytes should fail");
+        assert!(err.to_string().contains("invalid hex byte"));
     }
 }

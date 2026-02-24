@@ -367,4 +367,100 @@ mod tests {
         assert_eq!(entry.detail, "updated managed section");
         assert_eq!(log.verify_integrity(), AuditIntegrityStatus::Valid);
     }
+
+    #[test]
+    fn checkpoints_are_created_on_expected_intervals() {
+        let mut log = AuditLog::new(400);
+        for i in 0..129 {
+            log.record(
+                AuditOperation::Copy,
+                Some(format!("KEY_{i}")),
+                format!("entry {i}"),
+            );
+        }
+
+        assert_eq!(log.ledger().checkpoints.len(), 1);
+        assert_eq!(log.ledger().checkpoints[0].index, 127);
+    }
+
+    #[test]
+    fn verify_integrity_reports_unknown_operation() {
+        let mut log = AuditLog::new(10);
+        log.record(AuditOperation::FileUpdate, Some("KEY".to_string()), "first");
+        let mut ledger = log.ledger().clone();
+        ledger.entries.push(AuditChainEntry {
+            index: 1,
+            operation: "NotARealOp".to_string(),
+            target: None,
+            detail: "bad".to_string(),
+            at: Utc::now(),
+            prev_hash_hex: ledger
+                .entries
+                .last()
+                .map(|entry| entry.hash_hex.clone())
+                .unwrap_or_default(),
+            hash_hex: "bad".to_string(),
+        });
+
+        let status = verify_ledger_integrity(&ledger);
+        let AuditIntegrityStatus::Invalid { index, reason } = status else {
+            panic!("expected invalid ledger");
+        };
+        assert_eq!(index, 1);
+        assert!(reason.contains("unknown operation variant"));
+    }
+
+    #[test]
+    fn verify_integrity_reports_previous_hash_mismatch() {
+        let mut log = AuditLog::new(10);
+        log.record(AuditOperation::Unlock, None, "first");
+        log.record(AuditOperation::Lock, None, "second");
+        let mut ledger = log.ledger().clone();
+        let last = ledger.entries.len() - 1;
+        ledger.entries[last].prev_hash_hex = "deadbeef".to_string();
+
+        let status = verify_ledger_integrity(&ledger);
+        let AuditIntegrityStatus::Invalid { index, reason } = status else {
+            panic!("expected invalid ledger");
+        };
+        assert_eq!(index, 1);
+        assert!(reason.contains("previous hash link mismatch"));
+    }
+
+    #[test]
+    fn verify_integrity_reports_hash_mismatch() {
+        let mut log = AuditLog::new(10);
+        log.record(AuditOperation::Unlock, None, "first");
+        let mut ledger = log.ledger().clone();
+        ledger.entries[0].hash_hex = "not-really-a-hash".to_string();
+
+        let status = verify_ledger_integrity(&ledger);
+        let AuditIntegrityStatus::Invalid { index, reason } = status else {
+            panic!("expected invalid hash");
+        };
+        assert_eq!(index, 0);
+        assert!(reason.contains("entry hash mismatch"));
+    }
+
+    #[test]
+    fn prune_by_retention_keeps_checkpoints_consistent_with_retained_entries() {
+        let now = Utc::now();
+        let mut log = AuditLog::new_with_retention(10, 1);
+        log.record_with_timestamp(
+            AuditOperation::Unlock,
+            Some("KEY_OLD".to_string()),
+            "old".to_string(),
+            now - chrono::Duration::days(3),
+        );
+        log.record_with_timestamp(
+            AuditOperation::Unlock,
+            Some("KEY_NEW".to_string()),
+            "new".to_string(),
+            now,
+        );
+
+        assert_eq!(log.entries().len(), 1);
+        assert_eq!(log.ledger().entries.len(), 1);
+        assert!(log.ledger().checkpoints.is_empty());
+    }
 }

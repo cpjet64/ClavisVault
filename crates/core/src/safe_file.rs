@@ -1,6 +1,6 @@
 use std::{
     fs,
-    io::Write,
+    io::{self, Write},
     path::{Path, PathBuf},
 };
 
@@ -32,6 +32,109 @@ impl Default for LocalSafeFileOps {
 }
 
 impl LocalSafeFileOps {
+    fn atomic_write_with_fs_ops<R, D>(
+        &self,
+        path: &Path,
+        data: &[u8],
+        mut rename: R,
+        mut remove_file: D,
+    ) -> Result<()>
+    where
+        R: for<'a> FnMut(&'a Path, &'a Path) -> io::Result<()>,
+        D: for<'a> FnMut(&'a Path) -> io::Result<()>,
+    {
+        let parent = path
+            .parent()
+            .ok_or_else(|| anyhow!("path has no parent: {}", path.display()))?;
+
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed creating parent directory {}", parent.display()))?;
+
+        if path.exists() && path.is_dir() {
+            return Err(anyhow!(
+                "cannot atomically write to directory {}",
+                path.display()
+            ));
+        }
+
+        let tmp_name = format!(
+            ".{}.{}.tmp",
+            path.file_name()
+                .ok_or_else(|| anyhow!("path has no filename: {}", path.display()))?
+                .to_string_lossy(),
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        );
+
+        let tmp_path = parent.join(tmp_name);
+
+        {
+            let mut file = fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&tmp_path)
+                .with_context(|| format!("failed creating temp file {}", tmp_path.display()))?;
+            file.write_all(data)
+                .with_context(|| format!("failed writing temp file {}", tmp_path.display()))?;
+            file.sync_all()
+                .with_context(|| format!("failed syncing temp file {}", tmp_path.display()))?;
+        }
+
+        if let Err(err) = rename(&tmp_path, path) {
+            if path.exists() {
+                let backup_path = Self::atomic_replace_path(path)?;
+
+                if let Err(backup_err) = rename(path, &backup_path) {
+                    let _ = remove_file(&tmp_path);
+                    return Err(backup_err).with_context(|| {
+                        format!(
+                            "failed creating replacement backup {}",
+                            backup_path.display()
+                        )
+                    });
+                }
+
+                match rename(&tmp_path, path) {
+                    Ok(()) => {
+                        if let Err(remove_err) = remove_file(&backup_path) {
+                            tracing::warn!(error = %remove_err, path = %path.display(), "failed to remove pre-write backup");
+                        }
+                        return Ok(());
+                    }
+                    Err(write_err) => {
+                        if let Err(restore_err) = rename(&backup_path, path) {
+                            let _ = remove_file(&tmp_path);
+                            return Err(restore_err).with_context(|| {
+                                format!(
+                                    "failed to restore backup while recovering atomic write for {}",
+                                    path.display()
+                                )
+                            })?;
+                        }
+                        let _ = remove_file(&tmp_path);
+                        return Err(write_err).with_context(|| {
+                            format!(
+                                "failed replacing existing file {} after staging temporary copy",
+                                path.display()
+                            )
+                        })?;
+                    }
+                }
+            }
+
+            let _ = remove_file(&tmp_path);
+
+            return Err(err).with_context(|| {
+                format!(
+                    "failed to atomically move {} -> {}",
+                    tmp_path.display(),
+                    path.display()
+                )
+            })?;
+        }
+
+        Ok(())
+    }
+
     pub fn with_max_backups(max_backups: usize) -> Self {
         Self { max_backups }
     }
@@ -172,96 +275,7 @@ impl SafeFileOps for LocalSafeFileOps {
     }
 
     fn atomic_write(&self, path: &Path, data: &[u8]) -> Result<()> {
-        let parent = path
-            .parent()
-            .ok_or_else(|| anyhow!("path has no parent: {}", path.display()))?;
-
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed creating parent directory {}", parent.display()))?;
-
-        if path.exists() && path.is_dir() {
-            return Err(anyhow!(
-                "cannot atomically write to directory {}",
-                path.display()
-            ));
-        }
-
-        let tmp_name = format!(
-            ".{}.{}.tmp",
-            path.file_name()
-                .ok_or_else(|| anyhow!("path has no filename: {}", path.display()))?
-                .to_string_lossy(),
-            Utc::now().timestamp_nanos_opt().unwrap_or_default()
-        );
-
-        let tmp_path = parent.join(tmp_name);
-
-        {
-            let mut file = fs::OpenOptions::new()
-                .create_new(true)
-                .write(true)
-                .open(&tmp_path)
-                .with_context(|| format!("failed creating temp file {}", tmp_path.display()))?;
-            file.write_all(data)
-                .with_context(|| format!("failed writing temp file {}", tmp_path.display()))?;
-            file.sync_all()
-                .with_context(|| format!("failed syncing temp file {}", tmp_path.display()))?;
-        }
-
-        if let Err(err) = fs::rename(&tmp_path, path) {
-            if path.exists() {
-                let backup_path = Self::atomic_replace_path(path)?;
-
-                if let Err(backup_err) = fs::rename(path, &backup_path) {
-                    let _ = fs::remove_file(&tmp_path);
-                    return Err(backup_err).with_context(|| {
-                        format!(
-                            "failed creating replacement backup {}",
-                            backup_path.display()
-                        )
-                    });
-                }
-
-                match fs::rename(&tmp_path, path) {
-                    Ok(()) => {
-                        if let Err(remove_err) = fs::remove_file(&backup_path) {
-                            tracing::warn!(error = %remove_err, path = %path.display(), "failed to remove pre-write backup");
-                        }
-                        return Ok(());
-                    }
-                    Err(write_err) => {
-                        if let Err(restore_err) = fs::rename(&backup_path, path) {
-                            let _ = fs::remove_file(&tmp_path);
-                            return Err(restore_err).with_context(|| {
-                                format!(
-                                    "failed to restore backup while recovering atomic write for {}",
-                                    path.display()
-                                )
-                            })?;
-                        }
-                        let _ = fs::remove_file(&tmp_path);
-                        return Err(write_err).with_context(|| {
-                            format!(
-                                "failed replacing existing file {} after staging temporary copy",
-                                path.display()
-                            )
-                        })?;
-                    }
-                }
-            }
-
-            let _ = fs::remove_file(&tmp_path);
-
-            return Err(err).with_context(|| {
-                format!(
-                    "failed to atomically move {} -> {}",
-                    tmp_path.display(),
-                    path.display()
-                )
-            })?;
-        }
-
-        Ok(())
+        self.atomic_write_with_fs_ops(path, data, |a, b| fs::rename(a, b), |p| fs::remove_file(p))
     }
 }
 
@@ -363,6 +377,10 @@ mod tests {
         assert!(err.to_string().contains("path has no filename"));
     }
 
+    // COVERAGE NOTE (platform-dependent and unshareable with Unix semantics):
+    // Windows rejects a broader class of path characters at creation time (e.g. '|', '<', '*', '?'),
+    // while Unix allows many of these. The same branch is therefore not observable on Unix hosts,
+    // so this is intentionally Windows-only and should not be converted into a cross-platform test.
     #[cfg(windows)]
     #[test]
     fn backup_with_reserved_filename_reports_empty_file_error() {
@@ -440,6 +458,172 @@ mod tests {
         );
     }
 
+    #[test]
+    fn atomic_write_existing_target_retries_with_backup_and_returns_target_error() {
+        let root = temp_dir("safe-file-existing-target-recoverable-failure");
+        let target = root.join("vault.cv");
+        let ops = LocalSafeFileOps::default();
+        ops.atomic_write(&target, b"stable")
+            .expect("seed write should work");
+
+        let mut call = 0;
+        let mut observed = Vec::new();
+        let rename = |from: &Path, to: &Path| {
+            call += 1;
+            observed.push((from.to_path_buf(), to.to_path_buf()));
+            match call {
+                1 => Err(io::Error::other("initial rename blocked")),
+                2 => Ok(()),
+                3 => Err(io::Error::other("staging rename failed")),
+                _ => Ok(()),
+            }
+        };
+        let remove_file = |_path: &Path| Ok(());
+
+        let result = ops.atomic_write_with_fs_ops(&target, b"updated", rename, remove_file);
+        assert!(result.is_err());
+        assert!(
+            result
+                .expect_err("expected recoverable write error")
+                .to_string()
+                .contains("failed replacing existing file")
+        );
+
+        assert_eq!(call, 4);
+        assert!(
+            observed[0]
+                .0
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().ends_with(".tmp"))
+        );
+        assert_eq!(
+            fs::read(&target).expect("target should remain original"),
+            b"stable"
+        );
+    }
+
+    #[test]
+    fn atomic_write_existing_target_backup_swap_and_restore_error() {
+        let root = temp_dir("safe-file-existing-target-restore-failure");
+        let target = root.join("vault.cv");
+        let ops = LocalSafeFileOps::default();
+        ops.atomic_write(&target, b"stable")
+            .expect("seed write should work");
+
+        let mut call = 0;
+        let rename = |_from: &Path, _to: &Path| {
+            call += 1;
+            match call {
+                1 => Err(io::Error::other("initial rename blocked")),
+                2 => Ok(()),
+                3 => Err(io::Error::other("staging rename failed")),
+                4 => Err(io::Error::other("restore failed")),
+                _ => Ok(()),
+            }
+        };
+
+        let remove_file = |_path: &Path| Ok(());
+
+        let err = ops
+            .atomic_write_with_fs_ops(&target, b"updated", rename, remove_file)
+            .expect_err("restore failure should fail");
+        assert!(err.to_string().contains("failed to restore backup"));
+        assert_eq!(call, 4);
+    }
+
+    #[test]
+    fn atomic_write_existing_target_first_rename_failure_after_backup_write_is_recoverable() {
+        let root = temp_dir("safe-file-existing-target-backup-cleanup");
+        let target = root.join("vault.cv");
+        let ops = LocalSafeFileOps::default();
+        ops.atomic_write(&target, b"stable")
+            .expect("seed write should work");
+
+        let mut call = 0;
+        let rename = |from: &Path, to: &Path| {
+            call += 1;
+            match call {
+                1 => Err(io::Error::other("initial rename blocked")),
+                2..=3 => {
+                    fs::rename(from, to).expect("rename fallback simulation should succeed");
+                    Ok(())
+                }
+                _ => Ok(()),
+            }
+        };
+
+        let mut remove_count = 0;
+        let remove_file = |_path: &Path| {
+            remove_count += 1;
+            if remove_count == 1 {
+                Err(io::Error::other("cleanup delayed"))
+            } else {
+                Ok(())
+            }
+        };
+
+        ops.atomic_write_with_fs_ops(&target, b"updated", rename, remove_file)
+            .expect("failed to write after recoverable swap should still work");
+        assert_eq!(remove_count, 1);
+        assert_eq!(
+            fs::read(&target).expect("target should contain updated payload"),
+            b"updated"
+        );
+    }
+
+    #[test]
+    fn atomic_write_fails_for_nonexistent_target_when_rename_cannot_run() {
+        let root = temp_dir("safe-file-nonexistent-target-failure");
+        let target = root.join("no-file.cv");
+        let ops = LocalSafeFileOps::default();
+
+        let rename = |_from: &Path, _to: &Path| Err(io::Error::other("blocked rename"));
+        let remove_file = |_path: &Path| Ok(());
+
+        let err = ops
+            .atomic_write_with_fs_ops(&target, b"payload", rename, remove_file)
+            .expect_err("nonexistent target should bubble atomic move failure");
+        assert!(err.to_string().contains("failed to atomically move"));
+    }
+
+    #[test]
+    fn atomic_write_bubbles_backup_creation_failure() {
+        let root = temp_dir("safe-file-existing-target-backup-creation-fail");
+        let target = root.join("vault.cv");
+        let ops = LocalSafeFileOps::default();
+        ops.atomic_write(&target, b"stable")
+            .expect("seed write should work");
+
+        let mut call = 0;
+        let rename = |_from: &Path, _to: &Path| {
+            call += 1;
+            if call == 1 {
+                Err(io::Error::other("initial rename blocked"))
+            } else {
+                Err(io::Error::other("backup rename failed"))
+            }
+        };
+        let remove_file = |_path: &Path| Ok(());
+
+        let err = ops
+            .atomic_write_with_fs_ops(&target, b"updated", rename, remove_file)
+            .expect_err("backup-creation failure should fail");
+        assert!(
+            err.to_string()
+                .contains("failed creating replacement backup")
+        );
+        assert_eq!(call, 2);
+        assert_eq!(
+            fs::read(&target).expect("target should remain original"),
+            b"stable"
+        );
+    }
+
+    // COVERAGE NOTE (platform-dependent, Windows-only test path):
+    // This branch depends on Windows native file-share locking via `OpenOptionsExt::share_mode`.
+    // Unix test targets do not model Windows `share_mode` semantics through the same API surface,
+    // so this behavior cannot be executed on Linux/macOS and must remain Windows-only.
+    // The production behavior still needs to remain covered in that specific platform lane.
     #[cfg(windows)]
     #[test]
     fn atomic_write_revert_when_target_is_locked() {
@@ -464,6 +648,10 @@ mod tests {
         );
     }
 
+    // COVERAGE NOTE (platform-dependent, metadata model divergence):
+    // Windows treats read-only as a file-attribute transition; Unix filesystems model this with mode bits.
+    // The branch verifies behavior that only exists in this semantics and is therefore explicitly
+    // Windows-only; reproducing the same assertion on Unix would create false assumptions.
     #[cfg(windows)]
     #[test]
     fn atomic_write_over_readonly_file_succeeds() {
@@ -503,6 +691,10 @@ mod tests {
         assert!(err.to_string().contains("path has no parent"));
     }
 
+    // COVERAGE NOTE (platform-dependent, POSIX path edge):
+    // This test exercises a Unix root-path edge case (`/` has no filename component).
+    // Windows path parsing does not produce the same error mode for this branch, so the test is
+    // intentionally Unix-only and cannot run in the Windows lane.
     #[cfg(unix)]
     #[test]
     fn atomic_replace_path_rejects_path_without_filename() {
@@ -551,6 +743,10 @@ mod tests {
         );
     }
 
+    // COVERAGE NOTE (platform-dependent and host-privilege-sensitive):
+    // These permission-denied regressions depend on Unix mode-bit semantics and can be affected by
+    // elevated runner privileges. We assert on structural behavior rather than one hard error string
+    // so the same test stays reliable across runners that may bypass dir write restrictions.
     #[cfg(unix)]
     #[test]
     fn permission_denied_is_reported() {
@@ -572,13 +768,21 @@ mod tests {
         match write_result {
             Err(_) => {}
             Ok(()) => {
-                // Privileged users can bypass directory write bits on some CI runners.
+                // COVERAGE NOTE (host-privilege-sensitive branch):
+                // On privileged CI runners, mode bits may be ignored sufficiently to allow the write.
+                // This branch is kept to preserve behavioral observability while avoiding hard flake
+                // assertions in those environments, so we verify only that a created file is coherent
+                // and then cleanup it.
                 assert!(blocked.exists());
                 let _ = fs::remove_file(&blocked);
             }
         }
     }
 
+    // COVERAGE NOTE (platform-dependent and host-privilege-sensitive):
+    // Same model as above for backup-directory creation; runner privileges can make this path
+    // observable as success in privileged environments even when nominally read-only.
+    // The test therefore models both strict-deny and permissive outcomes and treats both as valid.
     #[cfg(unix)]
     #[test]
     fn backup_empty_file_creation_reports_error_when_parent_is_read_only() {
@@ -606,7 +810,10 @@ mod tests {
                 );
             }
             Ok(backup) => {
-                // Privileged users can bypass directory write bits on some CI runners.
+                // COVERAGE NOTE (host-privilege-sensitive branch):
+                // If mode enforcement is bypassed by the runner policy, backup succeeds even in a
+                // read-only directory setup. We validate output shape only and treat this as
+                // environment-sensitive fallback behavior.
                 assert!(backup.backup_path.exists());
                 let _ = fs::remove_file(backup.backup_path);
             }

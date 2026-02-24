@@ -207,4 +207,59 @@ mod tests {
             .expect("export check should exist");
         assert!(check.ok, "{}", check.detail);
     }
+
+    #[test]
+    fn recovery_drill_reports_missing_vault_as_error() {
+        let dir = temp_dir("missing-vault");
+        let vault_path = dir.join("missing.cv");
+
+        let report = run_recovery_drill(&vault_path, None, None);
+        assert!(!report.success);
+
+        let vault_read = report
+            .checks
+            .iter()
+            .find(|entry| entry.name == "vault_read")
+            .expect("vault_read check should exist");
+        assert!(!vault_read.ok);
+        assert!(vault_read.detail.contains("failed reading vault"));
+    }
+
+    #[test]
+    fn recovery_drill_reports_missing_export_as_error() {
+        let dir = temp_dir("missing-export");
+        let vault_path = dir.join("vault.cv");
+        fs::write(&vault_path, b"not-an-encrypted-vault").expect("seed vault fixture should write");
+        let export_path = dir.join("missing-export.cvx");
+
+        let report = run_recovery_drill(&vault_path, Some(&export_path), Some("export-passphrase"));
+        assert!(!report.success);
+
+        let export_read = report
+            .checks
+            .iter()
+            .find(|entry| entry.name == "export_read")
+            .expect("export_read check should exist");
+        assert!(!export_read.ok);
+        assert!(export_read.detail.contains("failed reading export"));
+    }
+
+    #[test]
+    fn recovery_drill_reports_export_verification_failure() {
+        let dir = temp_dir("bad-export");
+        let vault_path = dir.join("vault.cv");
+        fs::write(&vault_path, b"not-an-encrypted-vault").expect("seed vault fixture should write");
+        let export_path = dir.join("invalid-export.cvx");
+        fs::write(&export_path, b"not-an-export").expect("seed bad export fixture should write");
+
+        let report = run_recovery_drill(&vault_path, Some(&export_path), Some("export-passphrase"));
+        let export_check = report
+            .checks
+            .iter()
+            .find(|entry| entry.name == "export_verify")
+            .expect("export_verify check should exist");
+
+        assert!(!export_check.ok);
+        assert!(export_check.detail.contains("export verification failed"));
+    }
 }

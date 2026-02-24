@@ -337,4 +337,73 @@ mod tests {
 
         assert_eq!(seen.len(), 128);
     }
+
+    #[test]
+    fn lock_vault_rejects_invalid_master_key_length() {
+        let vault = sample_vault(100);
+        let invalid_key = MasterKey::new(vec![1_u8; 16]);
+
+        let result = lock_vault("vault.cv", &vault, &invalid_key);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("invalid key length")
+        );
+    }
+
+    #[test]
+    fn unlock_vault_rejects_invalid_master_key_length() {
+        let vault = sample_vault(101);
+        let short_key = MasterKey::new(vec![0_u8; 16]);
+        let encrypted = lock_vault(
+            "vault.cv",
+            &vault,
+            &derive_master_key("pass", &vault.salt).expect("derive"),
+        )
+        .expect("seed encrypt");
+
+        let result = unlock_vault(&encrypted, &short_key);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("invalid key length")
+        );
+    }
+
+    #[test]
+    fn unlock_vault_reports_corrupt_ciphertext() {
+        let vault = sample_vault(102);
+        let key = derive_master_key("pass", &vault.salt).expect("derive key should work");
+        let mut encrypted = lock_vault("vault.cv", &vault, &key).expect("encrypt");
+        encrypted.ciphertext[0] ^= 0xFF;
+
+        let result = unlock_vault(&encrypted, &key);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("decryption failed")
+        );
+    }
+
+    #[test]
+    fn unlock_with_wrong_password_reports_error() {
+        let vault = sample_vault(103);
+        let key = derive_master_key("correct-horse", &vault.salt).expect("derive key should work");
+        let encrypted = lock_vault("vault.cv", &vault, &key).expect("encrypt");
+
+        let result = unlock_with_password_or_biometric(&encrypted, Some("wrong-pass"), None, None);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("decryption failed")
+        );
+    }
 }

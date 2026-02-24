@@ -247,6 +247,120 @@ mod tests {
     }
 
     #[test]
+    fn key_entry_ensure_metadata_defaults_populates_missing_values() {
+        let mut entry = KeyEntry {
+            name: "ROTATED".to_string(),
+            description: "metadata default".to_string(),
+            tags: vec![],
+            last_updated: Utc::now(),
+            created_at: default_created_at(),
+            expires_at: None,
+            rotation_period_days: Some(30),
+            warn_before_days: None,
+            last_rotated_at: None,
+            owner: None,
+            secret: Some("seed".to_string()),
+        };
+
+        let changed = entry.ensure_metadata_defaults();
+
+        assert!(changed);
+        assert_eq!(entry.created_at, entry.last_updated);
+        assert_eq!(entry.last_rotated_at, Some(entry.last_updated));
+        assert_eq!(entry.warn_before_days, Some(14));
+    }
+
+    #[test]
+    fn key_entry_ensure_metadata_defaults_no_changes_when_complete() {
+        let now = Utc::now();
+        let mut entry = KeyEntry {
+            name: "STABLE".to_string(),
+            description: "metadata stable".to_string(),
+            tags: vec!["ci".to_string()],
+            last_updated: now,
+            created_at: now,
+            expires_at: None,
+            rotation_period_days: None,
+            warn_before_days: None,
+            last_rotated_at: Some(now),
+            owner: Some("owner".to_string()),
+            secret: Some("secret".to_string()),
+        };
+
+        let changed = entry.ensure_metadata_defaults();
+
+        assert!(!changed);
+        assert_eq!(entry.created_at, now);
+        assert_eq!(entry.last_rotated_at, Some(now));
+        assert!(entry.secret.is_some());
+    }
+
+    #[test]
+    fn key_entry_zeroize_secret_handles_none_and_some() {
+        let mut with_secret = KeyEntry {
+            name: "WITH_SECRET".to_string(),
+            description: "has secret".to_string(),
+            tags: vec![],
+            last_updated: Utc::now(),
+            created_at: Utc::now(),
+            expires_at: None,
+            rotation_period_days: None,
+            warn_before_days: None,
+            last_rotated_at: Some(Utc::now()),
+            owner: None,
+            secret: Some("keep_out".to_string()),
+        };
+        with_secret.zeroize_secret();
+        assert!(with_secret.secret.is_none());
+
+        let mut without_secret = KeyEntry {
+            name: "WITHOUT_SECRET".to_string(),
+            description: "empty".to_string(),
+            tags: vec![],
+            last_updated: Utc::now(),
+            created_at: Utc::now(),
+            expires_at: None,
+            rotation_period_days: None,
+            warn_before_days: None,
+            last_rotated_at: Some(Utc::now()),
+            owner: None,
+            secret: None,
+        };
+        without_secret.zeroize_secret();
+        assert!(without_secret.secret.is_none());
+    }
+
+    #[test]
+    fn export_signer_trust_policy_tracks_and_matches_signers() {
+        let mut policy = ExportSignerTrustPolicy::default();
+        policy.record_trusted_signer("kid-1".to_string(), "pubkey-A".to_string());
+        policy.record_trusted_signer("kid-2".to_string(), "pubkey-B".to_string());
+
+        assert!(policy.is_signer_trusted("kid-1", "pubkey-A"));
+        assert!(policy.signer_matches_existing_key("kid-2", "pubkey-B"));
+        assert!(!policy.signer_matches_existing_key("kid-2", "other"));
+        assert!(!policy.is_signer_trusted("missing", "none"));
+
+        policy.remove_unknown_signer("kid-1");
+        assert!(!policy.is_signer_trusted("kid-1", "pubkey-A"));
+    }
+
+    #[test]
+    fn export_signer_trust_policy_respects_legacy_flags() {
+        let mut policy = ExportSignerTrustPolicy::default();
+        assert!(policy.warn_legacy_import());
+        assert!(!policy.allow_legacy_import());
+
+        policy.legacy_import_mode = ExportLegacyMode::Allow;
+        assert!(policy.allow_legacy_import());
+        assert!(!policy.warn_legacy_import());
+
+        policy.legacy_import_mode = ExportLegacyMode::Block;
+        assert!(!policy.warn_legacy_import());
+        assert!(!policy.allow_legacy_import());
+    }
+
+    #[test]
     fn encrypted_vault_blob_round_trip() {
         let vault = EncryptedVault {
             path: PathBuf::from("vault.cv"),
@@ -262,6 +376,32 @@ mod tests {
         let restored = EncryptedVault::from_bytes("vault.cv", &bytes).expect("deserialize blob");
 
         assert_eq!(restored, vault);
+    }
+
+    #[test]
+    fn encrypted_vault_from_blob_round_trips_path_and_bytes() {
+        let blob = EncryptedVaultBlob {
+            header: EncryptedHeader {
+                version: 5,
+                nonce: [2; 12],
+                salt: [11; 16],
+            },
+            ciphertext: vec![42, 43, 44],
+        };
+
+        let vault = EncryptedVault::from_blob("/tmp/my-vault.cv", blob.clone());
+        assert_eq!(vault.path, PathBuf::from("/tmp/my-vault.cv"));
+        assert_eq!(vault.to_blob(), blob);
+    }
+
+    #[test]
+    fn vault_data_migrate_in_place_without_changes() {
+        let mut vault = VaultData::new([8; 16]);
+        let changed = vault.migrate_in_place();
+
+        assert!(!changed);
+        assert_eq!(vault.version, VAULT_VERSION);
+        assert!(vault.keys.is_empty());
     }
 
     #[test]
