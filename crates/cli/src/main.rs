@@ -551,6 +551,14 @@ fn parse_recovery_command(options: &[String]) -> Result<Command> {
         }
         i += 1;
     }
+    if export_path.is_some()
+        && export_passphrase
+            .as_ref()
+            .map(|value| value.trim().is_empty())
+            .unwrap_or(true)
+    {
+        bail!("--export-passphrase is required when --export-path is set");
+    }
     Ok(Command::RecoveryDrill {
         export_path,
         export_passphrase,
@@ -1276,6 +1284,38 @@ mod tests {
                 .expect("pwsh.exe path should parse"),
             ShellKind::Pwsh
         ));
+    }
+
+    #[test]
+    fn parse_recovery_command_requires_passphrase_with_export_path() {
+        let err = parse_recovery_command(&["--export-path".to_string(), "vault.cvx".to_string()])
+            .expect_err("missing passphrase must fail");
+        assert!(
+            err.to_string()
+                .contains("--export-passphrase is required when --export-path is set")
+        );
+    }
+
+    #[test]
+    fn parse_recovery_command_accepts_export_with_passphrase() {
+        let command = parse_recovery_command(&[
+            "--export-path".to_string(),
+            "vault.cvx".to_string(),
+            "--export-passphrase".to_string(),
+            "test-passphrase".to_string(),
+        ])
+        .expect("recovery parse should work");
+
+        match command {
+            Command::RecoveryDrill {
+                export_path,
+                export_passphrase,
+            } => {
+                assert_eq!(export_path, Some(PathBuf::from("vault.cvx")));
+                assert_eq!(export_passphrase.as_deref(), Some("test-passphrase"));
+            }
+            _ => unreachable!("expected recovery command"),
+        }
     }
 
     #[test]

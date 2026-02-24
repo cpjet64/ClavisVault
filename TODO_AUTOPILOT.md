@@ -29,6 +29,8 @@
 - Hardened recovery drill export validation: export verification now fails explicitly when export passphrase is missing/empty.
 - Added `core` regression tests for recovery drill export verification with and without passphrase.
 - Synced `docs/SPEC.md` and `masterplan.md` to record the recovery-drill passphrase requirement and verification behavior.
+- Added CLI parse guard: `recovery-drill --export-path` now requires `--export-passphrase`.
+- Added CLI parser tests for recovery command passphrase requirement and valid parse path.
 
 ## Decisions Needed
 - None.
