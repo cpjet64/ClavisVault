@@ -1249,7 +1249,7 @@ mod tests {
                 assert!(matches!(options.shell, ShellKind::Pwsh));
                 assert_eq!(options.ttl_minutes, 45);
             }
-            _ => panic!("expected env-load command"),
+            _ => unreachable!("expected env-load command"),
         }
     }
 
