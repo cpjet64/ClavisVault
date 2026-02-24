@@ -113,3 +113,8 @@ Scope: Consolidated check of repository documentation against implementation sta
 | 6. Policy-as-code secret hygiene | ✅ Implemented | `crates/core/src/policy.rs`, `policy/secret-policy.toml`, `crates/cli/src/main.rs` (`policy check`), desktop warning path in `crates/desktop/src-tauri/src/lib.rs` |
 | 7. Recovery workflow hardening | ✅ Implemented | `crates/core/src/recovery.rs`, `crates/desktop/src-tauri/src/lib.rs` (`run_recovery_drill`), `crates/cli/src/main.rs` (`recovery-drill`) |
 | 8. Alerting quality improvements | ✅ Implemented | `docs/alerts.md`, `crates/desktop/src-tauri/src/lib.rs` (parser fields, scheduling, acknowledgment filtering) |
+
+## Unimplemented requirement register
+
+- None currently identified in reviewed documentation scope (`AGENTS.md`, `CLAUDE.md`, `README.md`, `RUN-THIS-PROMPT.md`, `docs/SPEC.md`, `docs/alerts.md`, `CHANGELOG.md`).
+- New gaps should be added here first, then linked to evidence and follow-up commits.

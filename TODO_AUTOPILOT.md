@@ -23,6 +23,7 @@
 - Updated `docs/SPEC.md` server behavior wording to match implemented authenticated remote `erase` command.
 - Synced `masterplan.md` matrix with that SPEC alignment fix and code evidence.
 - Corrected `docs/SPEC.md` location wording to consistently document `docs/alerts.md` and root `CHANGELOG.md`.
+- Added explicit “Unimplemented requirement register” section to `masterplan.md` (currently empty / none identified).
 
 ## Decisions Needed
 - None.
