@@ -29,8 +29,8 @@ use clavisvault_core::{
     rotation::{list_rotation_findings, rotate_key},
     safe_file::{LocalSafeFileOps, SafeFileOps},
     shell::{
-        SESSION_TOKEN_ENV_VAR, ShellKind, VAULT_PATH_ENV_VAR, generate_hook, shell_env_assignments,
-        shell_session_token_file_snippets,
+        SESSION_TOKEN_ENV_VAR, SESSION_TOKEN_FILE_ENV_VAR, ShellKind, generate_hook,
+        shell_env_assignments, shell_session_token_file_snippets,
     },
     types::{EncryptedVault, KeyEntry, MasterKey, VaultData},
 };
@@ -61,6 +61,7 @@ struct CliPaths {
 struct AuthOptions {
     password: Option<String>,
     session_token: Option<String>,
+    session_token_file: Option<PathBuf>,
     allow_legacy_session_token: bool,
 }
 
@@ -69,6 +70,7 @@ impl AuthOptions {
         Self {
             password: None,
             session_token: None,
+            session_token_file: None,
             allow_legacy_session_token: false,
         }
     }
@@ -271,6 +273,13 @@ fn parse_env_load_command(options: &[String]) -> Result<Command> {
                 }
                 auth.session_token = Some(options[i].clone());
             }
+            "--session-token-file" | "--token-file" => {
+                i += 1;
+                if i >= options.len() {
+                    bail!("missing value for --session-token-file");
+                }
+                auth.session_token_file = Some(PathBuf::from(&options[i]));
+            }
             "--allow-legacy-session-token" => {
                 auth.allow_legacy_session_token = true;
             }
@@ -382,6 +391,13 @@ fn parse_add_key_command(options: &[String]) -> Result<Command> {
                 }
                 auth.session_token = Some(options[i].clone());
             }
+            "--session-token-file" | "--token-file" => {
+                i += 1;
+                if i >= options.len() {
+                    bail!("missing value for --session-token-file");
+                }
+                auth.session_token_file = Some(PathBuf::from(&options[i]));
+            }
             "--allow-legacy-session-token" => {
                 auth.allow_legacy_session_token = true;
             }
@@ -434,6 +450,13 @@ fn parse_remove_key_command(options: &[String]) -> Result<Command> {
                 }
                 auth.session_token = Some(options[i].clone());
             }
+            "--session-token-file" | "--token-file" => {
+                i += 1;
+                if i >= options.len() {
+                    bail!("missing value for --session-token-file");
+                }
+                auth.session_token_file = Some(PathBuf::from(&options[i]));
+            }
             "--allow-legacy-session-token" => {
                 auth.allow_legacy_session_token = true;
             }
@@ -482,6 +505,13 @@ fn parse_rotate_key_command(options: &[String]) -> Result<Command> {
                 }
                 auth.session_token = Some(options[i].to_string());
             }
+            "--session-token-file" | "--token-file" => {
+                i += 1;
+                if i >= options.len() {
+                    bail!("missing value for --session-token-file");
+                }
+                auth.session_token_file = Some(PathBuf::from(&options[i]));
+            }
             "--allow-legacy-session-token" => {
                 auth.allow_legacy_session_token = true;
             }
@@ -524,6 +554,13 @@ fn parse_policy_command(options: &[String]) -> Result<Command> {
                     bail!("missing value for --session-token");
                 }
                 auth.session_token = Some(options[i].to_string());
+            }
+            "--session-token-file" | "--token-file" => {
+                i += 1;
+                if i >= options.len() {
+                    bail!("missing value for --session-token-file");
+                }
+                auth.session_token_file = Some(PathBuf::from(&options[i]));
             }
             "--allow-legacy-session-token" => {
                 auth.allow_legacy_session_token = true;
@@ -638,6 +675,13 @@ fn parse_auth_only_options(options: &[String], command_name: &str) -> Result<Aut
                     bail!("missing value for --session-token");
                 }
                 auth.session_token = Some(options[i].clone());
+            }
+            "--session-token-file" | "--token-file" => {
+                i += 1;
+                if i >= options.len() {
+                    bail!("missing value for --session-token-file");
+                }
+                auth.session_token_file = Some(PathBuf::from(&options[i]));
             }
             "--allow-legacy-session-token" => {
                 auth.allow_legacy_session_token = true;
@@ -896,6 +940,21 @@ fn resolve_password(auth: &AuthOptions) -> Result<String> {
         return Ok(password.clone());
     }
 
+    if let Some(token_file) = auth.session_token_file.as_deref() {
+        return parse_session_token_file(token_file, Utc::now());
+    }
+
+    if let Ok(token_file) = env::var(SESSION_TOKEN_FILE_ENV_VAR) {
+        match parse_session_token_file(Path::new(&token_file), Utc::now()) {
+            Ok(password) => return Ok(password),
+            Err(err) => {
+                eprintln!(
+                    "warning: ignoring {SESSION_TOKEN_FILE_ENV_VAR} ({err}); falling back to password input"
+                );
+            }
+        }
+    }
+
     if let Some(token) = auth.session_token.as_ref() {
         if !auth.allow_legacy_session_token {
             bail!(
@@ -924,6 +983,17 @@ fn resolve_password(auth: &AuthOptions) -> Result<String> {
     }
 
     prompt_password()
+}
+
+fn parse_session_token_file(token_file: &Path, now: DateTime<Utc>) -> Result<String> {
+    let path = Path::new(token_file);
+    let token = fs::read_to_string(path)
+        .with_context(|| format!("session token file {} not readable", path.display()))?;
+    let password = parse_session_token(token.trim(), now).inspect_err(|_| {
+        fs::remove_file(path).ok();
+    })?;
+    fs::remove_file(path).ok();
+    Ok(password)
 }
 
 fn prompt_password() -> Result<String> {
@@ -1330,19 +1400,26 @@ fn print_help() {
     println!("Examples:");
     println!("  clavis add-key --name OPENAI_API_KEY --value sk-... --password ...");
     println!(
-        "  clavis list --session-token ${session_env}  # opaque signed session token (TTL: {ttl}m)",
-        session_env = SESSION_TOKEN_ENV_VAR,
-        ttl = DEFAULT_SESSION_TTL_MINUTES
+        "  clavis list --session-token-file ${session_token_file}  # use ephemeral token file from env-load",
+        session_token_file = SESSION_TOKEN_FILE_ENV_VAR
     );
     println!("  clavis env-load --shell bash --ttl-minutes 60 --prefix APP_");
     println!("Notes:");
     println!(
-        "  session-token uses {session_env} and expires after {ttl} minutes",
-        session_env = SESSION_TOKEN_ENV_VAR,
-        ttl = DEFAULT_SESSION_TTL_MINUTES
+        "  session-token values resolve via {session_token_file}; legacy --session-token is deprecated",
+        session_token_file = SESSION_TOKEN_FILE_ENV_VAR
     );
     println!(
-        "  env-load exports {VAULT_PATH_ENV_VAR} so commands can reference the active vault path"
+        "  legacy session-token env var ({session_env}) is still accepted as compatibility only",
+        session_env = SESSION_TOKEN_ENV_VAR
+    );
+    println!(
+        "  env-load exports {session_token_file} so commands can read a one-time token handoff",
+        session_token_file = SESSION_TOKEN_FILE_ENV_VAR
+    );
+    println!(
+        "  env-load session tokens expire after {ttl} minutes",
+        ttl = DEFAULT_SESSION_TTL_MINUTES
     );
     println!("  --allow-legacy-session-token allows deprecated plaintext --session-token input");
 }
@@ -1640,6 +1717,7 @@ mod tests {
         let auth = AuthOptions {
             password: Some("password-123".to_string()),
             session_token: None,
+            session_token_file: None,
             allow_legacy_session_token: false,
         };
 
@@ -1664,6 +1742,7 @@ mod tests {
         let err = resolve_password(&AuthOptions {
             password: None,
             session_token: Some(token),
+            session_token_file: None,
             allow_legacy_session_token: false,
         })
         .expect_err("legacy session token should be blocked");
@@ -1681,6 +1760,7 @@ mod tests {
         let password = resolve_password(&AuthOptions {
             password: None,
             session_token: Some(token),
+            session_token_file: None,
             allow_legacy_session_token: true,
         })
         .expect("legacy session token should work with compatibility flag");
@@ -1698,12 +1778,47 @@ mod tests {
         assert_eq!(
             snippets,
             vec![
-                "CLAVISVAULT_SESSION_TOKEN_FILE='/tmp/.clavisvault-session-token'",
-                "export CLAVISVAULT_SESSION_TOKEN=\"$(cat $CLAVISVAULT_SESSION_TOKEN_FILE)\"",
-                "rm -f -- $CLAVISVAULT_SESSION_TOKEN_FILE",
+                "export CLAVISVAULT_SESSION_TOKEN_FILE='/tmp/.clavisvault-session-token'",
                 "export CLAVISVAULT_VAULT_PATH='/tmp/vault.cv'",
             ]
         );
+    }
+
+    #[test]
+    fn resolve_password_prefers_session_token_file_argument() {
+        let paths = temp_paths("token-file-argument");
+        fs::create_dir_all(&paths.data_dir).expect("token data dir should create");
+        let token = build_session_token("password-123", Utc::now(), 10)
+            .expect("session token should build");
+        let token_file = paths.data_dir.join("session.token");
+        fs::write(&token_file, &token).expect("token file should write");
+
+        let password = resolve_password(&AuthOptions {
+            password: None,
+            session_token: None,
+            session_token_file: Some(token_file.clone()),
+            allow_legacy_session_token: false,
+        })
+        .expect("session token file should authorize");
+
+        assert_eq!(password, "password-123");
+        assert!(
+            !token_file.exists(),
+            "token file should be removed after one-time consumption"
+        );
+    }
+
+    #[test]
+    fn parse_session_token_file_rejects_invalid_token_and_deletes_file() {
+        let paths = temp_paths("token-file-invalid");
+        fs::create_dir_all(&paths.data_dir).expect("token data dir should create");
+        let token_file = paths.data_dir.join("session.token");
+        fs::write(&token_file, "bad-token").expect("token file should write");
+
+        let err = parse_session_token_file(&token_file, Utc::now())
+            .expect_err("invalid token should fail");
+        assert!(!token_file.exists(), "invalid token file should be removed");
+        assert!(err.to_string().contains("unsupported session token format"));
     }
 
     #[test]
@@ -1716,5 +1831,21 @@ mod tests {
         assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
         assert!(token_file.exists());
         assert!(metadata.file_type().is_file());
+    }
+
+    #[test]
+    fn write_session_token_file_fails_if_data_dir_is_unwritable() {
+        let paths = temp_paths("token-file-storage-unavailable");
+        fs::create_dir_all(&paths.data_dir).expect("token data dir should create");
+        let blocked = paths.data_dir.join("blocked.token");
+        fs::write(&blocked, b"blocked").expect("setup blocked data path");
+
+        let err = write_session_token_file(&blocked, "token-value")
+            .expect_err("token file transport should fail when data dir is a file");
+        assert!(
+            err.to_string().to_lowercase().contains("failed creating")
+                || err.to_string().contains("failed creating"),
+            "{err}"
+        );
     }
 }

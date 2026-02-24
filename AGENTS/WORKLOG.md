@@ -1,18 +1,24 @@
 # Worklog
 
 ## Now
-- Implement next high-confidence hardening slice for relay trust controls and verify telemetry.
+- Finalize and harden CLI/session-token file transport behavior, then commit as an atomic security slice.
 
 ## Next
-- Focused pass on CLI session-token compatibility warnings and secret transport.
-- Add explicit relay trust-boundary documentation updates once relay hardening behavior is stable.
-- Continue deep-dive verification before marking repository state complete.
+- Continue deep-dive security sweep: session token fallback handling in CLI help/docs and remaining server/desktop trust enforcement consistency.
+- Run a repository-wide pass for remaining high-confidence security TODOs and update worklist evidence.
+- Prepare next implementation commit if any critical behavior gap remains (server scope enforcement and recovery drill continuity).
 
 ## Later
-- Finalize any remaining docs/notes cleanup (masterplan/alerts migration notes).
+- Finalize relay trust-boundary documentation updates and any remaining migration notes in `docs/SPEC.md` and `README.md`.
 - Optional: triage low-risk follow-up hardening based on future findings.
 
 ## Done
+- Completed CLI/desktop shell hardening follow-up slice:
+  - `clavisvault_core::shell` now exposes `CLAVISVAULT_SESSION_TOKEN_FILE`-based snippets and clear-path cleanup.
+  - `clavisvault-cli` now accepts `--session-token-file` (`--token-file`) and prefers it over env/plaintext token.
+  - Token files are parsed, validated, and removed after use; invalid files are removed and fail fast.
+  - Added/updated tests for token-file preference, one-time consumption, invalid token cleanup, and write failures.
+  - `cargo fmt --all`, targeted `cargo test` (cli/core), and `cargo clippy` for touched crates are clean.
 - Fixed `rand` trait import in core export signing path.
 - Added desktop export import trust enforcement with legacy policy handling and TOFU persistence path.
 - Added audit ledger retention policy support for max age and adjusted verification to allow safe checkpoint-safe compaction boundaries.

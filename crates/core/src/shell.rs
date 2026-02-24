@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 pub const SESSION_TOKEN_ENV_VAR: &str = "CLAVISVAULT_SESSION_TOKEN";
+pub const SESSION_TOKEN_FILE_ENV_VAR: &str = "CLAVISVAULT_SESSION_TOKEN_FILE";
 pub const VAULT_PATH_ENV_VAR: &str = "CLAVISVAULT_VAULT_PATH";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -135,21 +136,15 @@ pub fn shell_session_token_file_snippets(
 
     match shell {
         ShellKind::Bash | ShellKind::Zsh => vec![
-            format!("{token_file_var}={quoted_token_file}"),
-            format!("export {SESSION_TOKEN_ENV_VAR}=\"$(cat ${token_file_var})\""),
-            format!("rm -f -- ${token_file_var}"),
+            format!("export {token_file_var}={quoted_token_file}"),
             format!("export {VAULT_PATH_ENV_VAR}={quoted_vault_path}"),
         ],
         ShellKind::Fish => vec![
             format!("set -gx {token_file_var} {quoted_token_file}"),
-            format!("set -gx {SESSION_TOKEN_ENV_VAR} (cat ${token_file_var})"),
-            format!("rm -f -- ${token_file_var}"),
             format!("set -gx {VAULT_PATH_ENV_VAR} {quoted_vault_path}"),
         ],
         ShellKind::Pwsh => vec![
             format!("$env:{token_file_var} = {quoted_token_file}"),
-            format!("$Env:{SESSION_TOKEN_ENV_VAR} = Get-Content -Raw $env:{token_file_var}"),
-            format!("Remove-Item -Force -ErrorAction SilentlyContinue $env:{token_file_var}"),
             format!("$Env:{VAULT_PATH_ENV_VAR} = {quoted_vault_path}"),
         ],
     }
@@ -158,7 +153,11 @@ pub fn shell_session_token_file_snippets(
 pub fn shell_session_clear_snippets(shell: ShellKind) -> Vec<String> {
     shell_env_assignments(
         shell,
-        [(SESSION_TOKEN_ENV_VAR, ""), (VAULT_PATH_ENV_VAR, "")],
+        [
+            (SESSION_TOKEN_FILE_ENV_VAR, ""),
+            (SESSION_TOKEN_ENV_VAR, ""),
+            (VAULT_PATH_ENV_VAR, ""),
+        ],
     )
 }
 
@@ -282,14 +281,17 @@ mod tests {
         let clear_fish = shell_session_clear_snippets(ShellKind::Fish);
         let clear_pwsh = shell_session_clear_snippets(ShellKind::Pwsh);
 
-        assert_eq!(clear_bash.len(), 2);
-        assert_eq!(clear_bash[0], "export CLAVISVAULT_SESSION_TOKEN=''");
-        assert_eq!(clear_bash[1], "export CLAVISVAULT_VAULT_PATH=''");
-        assert_eq!(clear_zsh[0], "export CLAVISVAULT_SESSION_TOKEN=''");
-        assert_eq!(clear_fish[1], "set -gx CLAVISVAULT_VAULT_PATH ''");
+        assert_eq!(clear_bash.len(), 3);
+        assert_eq!(clear_bash[0], "export CLAVISVAULT_SESSION_TOKEN_FILE=''");
+        assert_eq!(clear_bash[1], "export CLAVISVAULT_SESSION_TOKEN=''");
+        assert_eq!(clear_bash[2], "export CLAVISVAULT_VAULT_PATH=''");
+        assert_eq!(clear_zsh[0], "export CLAVISVAULT_SESSION_TOKEN_FILE=''");
+        assert_eq!(clear_fish[0], "set -gx CLAVISVAULT_SESSION_TOKEN_FILE ''");
+        assert_eq!(clear_fish[2], "set -gx CLAVISVAULT_VAULT_PATH ''");
         assert_eq!(
             clear_pwsh,
             vec![
+                "$Env:CLAVISVAULT_SESSION_TOKEN_FILE = ''",
                 "$Env:CLAVISVAULT_SESSION_TOKEN = ''",
                 "$Env:CLAVISVAULT_VAULT_PATH = ''"
             ]
@@ -305,11 +307,9 @@ mod tests {
         );
         assert_eq!(
             snippets[0],
-            "CLAVISVAULT_SESSION_TOKEN_FILE='/tmp/.clavis-token'"
+            "export CLAVISVAULT_SESSION_TOKEN_FILE='/tmp/.clavis-token'"
         );
-        assert!(snippets[1].contains("cat $CLAVISVAULT_SESSION_TOKEN_FILE"));
-        assert!(snippets[2].contains("rm -f -- $CLAVISVAULT_SESSION_TOKEN_FILE"));
-        assert_eq!(snippets[3], "export CLAVISVAULT_VAULT_PATH='/tmp/vault.cv'");
+        assert_eq!(snippets[1], "export CLAVISVAULT_VAULT_PATH='/tmp/vault.cv'");
         assert!(
             snippets
                 .iter()
