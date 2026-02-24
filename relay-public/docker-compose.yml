@@ -1,5 +1,6 @@
 services:
   relay:
+    command: ["--bind", "0.0.0.0:51820"]
     build:
       context: ..
       dockerfile: relay-public/Dockerfile
