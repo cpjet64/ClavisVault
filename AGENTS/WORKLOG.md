@@ -1,42 +1,46 @@
 # Worklog
 
 ## Now
-- Repository remains classified as `FINISHED` / mostly complete after repeated production-risk verification.
-- Core verification remains green and no implementation stubs are active in production code.
-- Completed final panic/unreachable sweep focused on runtime crash risk in non-test code paths.
-- Latest sweep shows only docs placeholders (`docs/SPEC.md`, `docs/alerts.md`) and test-only panics/unreachables remain.
-- New coverage-hardening work has started for explicit `100%` target in core crate (`AGENTS/COVERAGE_100_TODO.md`).
+- Repository is in `IN-PROGRESS` mode due `clavisvault-core` coverage debt.
+- Latest `cargo llvm-cov --package clavisvault-core --lib --summary-only`:
+  - Line coverage: `87.56%` (4,510 covered / 561 missed)
+  - Function coverage: `79.16%` (451 covered / 94 missed)
+- Work is now gated by completing `AGENTS/COVERAGE_100_TODO.md` in strict file-level slices.
+- Platform-specific misses must be explicitly annotated in code with durable, reasoned `// COVERAGE NOTE` comments.
 
 ## Next
-- Execute `AGENTS/COVERAGE_100_TODO.md` to reach 100% core coverage, then reconcile with gate expectations.
-- Track platform-dependent exceptions with in-code `COVERAGE NOTE` comments and tolerances.
+- Execute `AGENTS/COVERAGE_100_TODO.md` starting with:
+  1. `crates/core/src/shell.rs` branch-complete coverage for all hook + assignment branches.
+  2. `crates/core/src/types.rs` core type constructor + zeroization/migration branch coverage.
+  3. `crates/core/src/policy.rs` and `crates/core/src/rotation.rs` policy decision branches.
+  4. `crates/core/src/audit_log.rs` and `crates/core/src/encryption.rs` integrity/error boundaries.
+  5. `crates/core/src/safe_file.rs` and remaining edge branches in `openclaw.rs`, `project_linker.rs`, `recovery.rs`.
+- Run after each atomic slice:
+  - `cargo test -p clavisvault-core --lib`
+  - `cargo llvm-cov --package clavisvault-core --lib --summary-only`
+  - `cargo llvm-cov --package clavisvault-core --lib --fail-under-lines 95`
+- Reconcile `COVERAGE NOTE` exceptions at each step with OS/platform reality notes.
 
 ## Later
-- Expand routine security posture review if dependency policy or release requirements change.
-- Optional periodic review of advisory exceptions and relay/desktop runtime threat assumptions.
-- Once 100% core coverage is reached, extend the plan to `server` and `desktop` integration surface coverage.
+- Re-evaluate this plan once core coverage is above all thresholds.
+- Extend similar slice planning to `desktop` and `server` once core is stable at `100%` target.
 
 ## Done
-- Re-ran `rg` panic/unreachable risk sweep in production candidate paths.
-- Confirmed remaining `panic!`/`unreachable!` instances are limited to `#[test]` modules.
-- Canonicalized worklog path to repository-defined `AGENTS/WORKLOG.md`.
-- Logged the latest risk/repo state evidence and assumptions.
-- Re-ran placeholder/crash-path scan across README/docs/crates:
-  - `rg -n "TODO|FIXME|XXX|HACK|not implemented|stub|unimplemented!|todo!|panic!\\(|unreachable!\\(" README.md docs crates/core crates/cli crates/server crates/relay crates/desktop crates/core/src`
-- Confirmed no new high-impact production-only gaps were found in this pass.
+- Created and now actively maintaining a dedicated coverage TODO with prioritized slices and impossible-path justification.
+- Updated repository state from finished to in-progress based on verified coverage telemetry and documented it.
 
 ## Decisions Needed
 - None.
 
 ## Evidence
-- `rg -n "panic!\(|unreachable!\(" crates`
-- `just ci-fast` baseline gates from earlier cycle remain green (`just ci-fast`: 258 tests passed, 0 failed) and no new regression was introduced during this step.
-- `cargo llvm-cov --package clavisvault-core --lib --summary-only` (currently: 87.56% line, 79.16% function coverage; logged separately in `AGENTS/COVERAGE_100_TODO.md`).
+- `cargo llvm-cov --package clavisvault-core --lib --summary-only`
+- `cargo llvm-cov --package clavisvault-core --lib --show-missing-lines`
+- `AGENTS/COVERAGE_100_TODO.md`
+- `rg -n "TODO|FIXME|XXX|HACK|not implemented|stub|unimplemented!|todo!|panic!\(|unreachable!\(" AGENTS/WORKLOG.md AGENTS/COVERAGE_100_TODO.md docs crates/core/src`
 
 ## Assumptions
-- `AGENTS/WORKLOG.md` is the canonical worklist due existing `AGENTS/` directory.
-- No user-directed work is pending that would force `IN-PROGRESS` completion tasks now.
-
+- `AGENTS/WORKLOG.md` and `AGENTS/COVERAGE_100_TODO.md` are the authoritative local worklist and coverage control files for this cycle.
+- Coverage completion is the highest-priority implementation task until `--fail-under-lines 95` for core passes.
 ## Archive
 
 ### Previous Worklog Entries
@@ -182,4 +186,5 @@
 - No behavior changes should silently reduce CLI compatibility.
 - Build must continue to pass with existing workspace gates.
 - Legacy v1 paths remain available only through explicit compatibility controls.
+
 

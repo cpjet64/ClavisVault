@@ -378,9 +378,11 @@ mod tests {
     }
 
     // COVERAGE NOTE (platform-dependent and unshareable with Unix semantics):
-    // Windows rejects a broader class of path characters at creation time (e.g. '|', '<', '*', '?'),
-    // while Unix allows many of these. The same branch is therefore not observable on Unix hosts,
-    // so this is intentionally Windows-only and should not be converted into a cross-platform test.
+    // This branch is Windows-specific because filesystem path validation for reserved chars (for
+    // example `|`, `<`, `*`, `?`) is enforced before user-space Rust code sees a normalized path.
+    // Unix accepts many of these inputs as literals, so there is no equivalent Unix runtime branch
+    // to validate. The only portable signal here is coverage tracking + platform gating, not a
+    // Unix-derived behavior assertion.
     #[cfg(windows)]
     #[test]
     fn backup_with_reserved_filename_reports_empty_file_error() {
@@ -620,10 +622,11 @@ mod tests {
     }
 
     // COVERAGE NOTE (platform-dependent, Windows-only test path):
-    // This branch depends on Windows native file-share locking via `OpenOptionsExt::share_mode`.
-    // Unix test targets do not model Windows `share_mode` semantics through the same API surface,
-    // so this behavior cannot be executed on Linux/macOS and must remain Windows-only.
-    // The production behavior still needs to remain covered in that specific platform lane.
+    // This branch requires `OpenOptionsExt::share_mode`, a Windows-only file-share flag.
+    // Unix targets do not expose an equivalent locking contract through the same API shape,
+    // so the same runtime behavior does not exist to assert outside Windows.
+    // Windows CI should continue to cover this path by design; do not simulate it with Unix-specific
+    // behavior.
     #[cfg(windows)]
     #[test]
     fn atomic_write_revert_when_target_is_locked() {
@@ -649,9 +652,10 @@ mod tests {
     }
 
     // COVERAGE NOTE (platform-dependent, metadata model divergence):
-    // Windows treats read-only as a file-attribute transition; Unix filesystems model this with mode bits.
-    // The branch verifies behavior that only exists in this semantics and is therefore explicitly
-    // Windows-only; reproducing the same assertion on Unix would create false assumptions.
+    // This behavior is only meaningful on Windows, where "readonly" is primarily a file attribute
+    // transition and interacts with sharing/replacement semantics differently than Unix mode bits.
+    // Asserting this same contract on Unix would verify a different model and risk false-positive
+    // confidence.
     #[cfg(windows)]
     #[test]
     fn atomic_write_over_readonly_file_succeeds() {
@@ -692,9 +696,9 @@ mod tests {
     }
 
     // COVERAGE NOTE (platform-dependent, POSIX path edge):
-    // This test exercises a Unix root-path edge case (`/` has no filename component).
-    // Windows path parsing does not produce the same error mode for this branch, so the test is
-    // intentionally Unix-only and cannot run in the Windows lane.
+    // This test validates a Unix-only root-path edge case where `/` has no filename component.
+    // Windows path parsing has a materially different root representation and does not produce the
+    // same runtime branch, so this test is intentionally Unix-only.
     #[cfg(unix)]
     #[test]
     fn atomic_replace_path_rejects_path_without_filename() {
@@ -744,9 +748,10 @@ mod tests {
     }
 
     // COVERAGE NOTE (platform-dependent and host-privilege-sensitive):
-    // These permission-denied regressions depend on Unix mode-bit semantics and can be affected by
-    // elevated runner privileges. We assert on structural behavior rather than one hard error string
-    // so the same test stays reliable across runners that may bypass dir write restrictions.
+    // These permission-denied regressions depend on Unix mode-bit enforcement and runner privileges.
+    // Elevated runners can legitimately bypass these mode checks, so this test cannot deterministically
+    // require the same error outcome everywhere. We assert only on structural behavior that is stable
+    // across privilege modes.
     #[cfg(unix)]
     #[test]
     fn permission_denied_is_reported() {
@@ -769,10 +774,9 @@ mod tests {
             Err(_) => {}
             Ok(()) => {
                 // COVERAGE NOTE (host-privilege-sensitive branch):
-                // On privileged CI runners, mode bits may be ignored sufficiently to allow the write.
-                // This branch is kept to preserve behavioral observability while avoiding hard flake
-                // assertions in those environments, so we verify only that a created file is coherent
-                // and then cleanup it.
+                // On privileged CI runners, mode bits can be bypassed enough that `atomic_write`
+                // unexpectedly succeeds. The only stable invariant is that a fallback-success path
+                // leaves a coherent file and is then cleaned up.
                 assert!(blocked.exists());
                 let _ = fs::remove_file(&blocked);
             }
@@ -780,9 +784,9 @@ mod tests {
     }
 
     // COVERAGE NOTE (platform-dependent and host-privilege-sensitive):
-    // Same model as above for backup-directory creation; runner privileges can make this path
-    // observable as success in privileged environments even when nominally read-only.
-    // The test therefore models both strict-deny and permissive outcomes and treats both as valid.
+    // Same model as above for backup-directory creation. Privileged environments may still allow
+    // writes under nominally read-only mode, so this test accepts both strict-deny and permissive
+    // outcomes.
     #[cfg(unix)]
     #[test]
     fn backup_empty_file_creation_reports_error_when_parent_is_read_only() {
@@ -811,9 +815,9 @@ mod tests {
             }
             Ok(backup) => {
                 // COVERAGE NOTE (host-privilege-sensitive branch):
-                // If mode enforcement is bypassed by the runner policy, backup succeeds even in a
-                // read-only directory setup. We validate output shape only and treat this as
-                // environment-sensitive fallback behavior.
+                // If enforcement is bypassed by the runner policy, backup creation may still succeed.
+                // We assert only on output shape and cleanup to keep this branch deterministic under
+                // both privilege models.
                 assert!(backup.backup_path.exists());
                 let _ = fs::remove_file(backup.backup_path);
             }
