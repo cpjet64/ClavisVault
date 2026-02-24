@@ -37,8 +37,6 @@ coverage/
 *.lcov
 lcov.info
 cobertura.xml
-tarpaulin-report.html
-tarpaulin-report.xml
 fuzz/artifacts/
 fuzz/coverage/
 __pycache__/
@@ -103,3 +101,5 @@ prompts/
 .worktree*/
 .codex_worktrees/
 security/dependency-graph*.json
+
+mutants.out/

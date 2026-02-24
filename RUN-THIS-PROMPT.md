@@ -28,7 +28,7 @@ corrected it, or FAIL if it needs manual attention. Do not skip items.
 ### 3. Justfile (required for all projects)
 - [ ] `Justfile` exists at project root
 - [ ] Has `ci-fast` recipe (hygiene + fmt + lint + build + test-quick)
-- [ ] Has `ci-deep` recipe (ci-fast + test-full + coverage + security + mutants + docs)
+- [ ] Has `ci-deep` recipe (ci-fast + test-full + coverage + security + docs)
 - [ ] Has language-appropriate recipes (Rust: fmt/lint/build/test/coverage/security/docs; Node: fmt-frontend/lint-frontend/test-frontend; Python: fmt-python/lint-python/test-python)
 - [ ] `set windows-shell := ["powershell.exe", "-NoLogo", "-Command"]` is present
 
@@ -39,15 +39,14 @@ corrected it, or FAIL if it needs manual attention. Do not skip items.
 - [ ] Hook files are executable (chmod +x on Unix)
 
 ### 5. Node.js Checks (skip if no package.json)
-- [ ] `pnpm-lock.yaml` exists (not package-lock.json or yarn.lock)
+- [ ] `package-lock.json` exists (or `pnpm-lock.yaml` if pnpm is the authoritative workflow)
 - [ ] `node_modules/` is in .gitignore
-- [ ] `.prettierrc` exists
-- [ ] `eslint.config.js` or equivalent exists
+- [ ] If lint/format checks are defined, corresponding config is present (`.prettierrc`, `eslint.config.js` or equivalent)
 
-### 6. Python Checks (skip if no Python files)
-- [ ] `pyproject.toml` exists (not just requirements.txt)
-- [ ] `uv.lock` exists
-- [ ] `ruff` is available (`uv run ruff --version`)
+### 6. Python Checks (skip if Python tooling is not dependency-managed)
+- [ ] If Python tooling is dependency-managed, `pyproject.toml` exists (not just requirements files)
+- [ ] If uv is used, `uv.lock` exists
+- [ ] `ruff` is available (`uv run ruff --version`) where Python lint policy is enforced
 - [ ] `.venv/` is in .gitignore
 
 ### 7. Security

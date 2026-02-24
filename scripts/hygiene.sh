@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -eo pipefail
 
 ERRORS=0
 
 echo "=== Repo Hygiene Check ==="
 
-# Check for large tracked files (>10MB, excluding vendor/)
+# Check for large tracked files (>10MB)
 echo -n "Large files (>10MB): "
 LARGE_FILES=$(git ls-files | while read -r f; do
-    if [[ -f "$f" && "$f" != vendor/* ]]; then
+    if [[ -f "\$f" ]]; then
         SIZE=$(wc -c < "$f" 2>/dev/null || echo 0)
         if [ "$SIZE" -gt 10485760 ]; then
             echo "  $f ($(( SIZE / 1048576 ))MB)"

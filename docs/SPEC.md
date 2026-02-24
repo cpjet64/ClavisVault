@@ -16,10 +16,10 @@ Core requirements (non-negotiable):
 - Agents.md and OpenClaw support with project linker and automatic safe updates.
 - Server version (headless) with direct encrypted P2P tunnel (QUIC + Noise).
 - Optional public relay (NAT hole-punching) for users who cannot do direct connections.
-- Extreme testing: ≥95% coverage, fuzzing, file-safety guarantees, security invariants enforced in CI.
+- Extreme testing: coverage gates, fuzzing, file-safety guarantees, security invariants enforced in CI.
 
 Project name (must be unused): ClavisVault  
-GitHub: github.com/YOURUSERNAME/clavisvault
+GitHub: github.com/cpjet64/ClavisVault
 
 ## 1. Monorepo Layout
 clavisvault/
@@ -36,15 +36,17 @@ clavisvault/
 ├── docs/
 │   ├── SPEC.md                 # this file
 │   ├── alerts.md               # YAML frontmatter alerts
-│   └── CHANGELOG.md    # repo root
+│   └── CHANGELOG.md            # repo root
 ├── relay-public/               # Docker + systemd for hosted relay
 └── scripts/
     ├── build-all.sh
-    └── release.sh
+    ├── build-all.ps1
+    ├── release.sh
+    └── release.ps1
 
 Root Cargo.toml (exact)
 [workspace]
-members = ["crates/*"]
+members = ["crates/*", "crates/desktop/src-tauri"]
 resolver = "3"
 
 [workspace.package]
@@ -52,7 +54,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.93.1"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/YOURUSERNAME/clavisvault"
+repository = "https://github.com/cpjet64/ClavisVault"
 
 [workspace.dependencies]
 # Core
@@ -237,7 +239,7 @@ Every packet:
 - Single-instance enforcement
 
 ## 7. Testing Requirements (must pass before any release)
-- cargo tarpaulin --lib ≥95% on core
+- Coverage gate: ≥95% on core (using project coverage tooling)
 - 10 000 encryption round-trips
 - File-safety tests (backup/restore on every write, corrupt simulation)
 - 50+ agents.md / openclaw fixtures

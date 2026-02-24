@@ -42,7 +42,7 @@ Give you full context about every API key / environment variable used in ClavisV
 
 ### 3. Code Quality & Testing (Mandatory)
 - `cargo clippy --all-targets --all-features -D warnings` must pass.
-- `cargo tarpaulin --lib` ≥ 95% on core crate.
+- `cargo llvm-cov test --package clavisvault-core --lib --fail-under-lines 95` ≥ 95% on core crate.
 - Every new function gets unit tests.
 - File-safety tests for **every** file touch (simulate corrupt, permission denied, etc.).
 - Encryption round-trip tests (10 000+ random vaults).
@@ -88,7 +88,7 @@ When the user gives you:
 - An “Implementation Prompt” → implement exactly, nothing more, nothing less.
 - A “Verification Prompt” → run every check and fix until it reports “PASSED”.
 
-Current status: Initial monorepo setup phase (core crate next).
+Current status: Documentation and implementation have been actively implemented and validated as a source for this cleanup pass; continue with routine verification before release gates.
 
 Primary goal: Build the most secure, beautiful, and thoughtful developer key vault ever made.
 

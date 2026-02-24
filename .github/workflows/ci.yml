@@ -92,11 +92,11 @@ jobs:
         with:
           toolchain: 1.93.1
 
-      - name: Install cargo-tarpaulin
-        run: cargo install cargo-tarpaulin --locked
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
 
-      - name: Run tarpaulin
-        run: cargo tarpaulin --config tarpaulin.toml --package clavisvault-core --lib --fail-under 95
+      - name: Run coverage
+        run: cargo llvm-cov test --package clavisvault-core --lib --fail-under-lines 95
 
   audit:
     name: Security audit + deny
@@ -147,7 +147,6 @@ jobs:
 
       - name: Install test tooling
         run: |
-          cargo install cargo-tarpaulin --locked
           cargo install cargo-audit --locked
           cargo install cargo-deny --locked
           cargo install cargo-fuzz --locked

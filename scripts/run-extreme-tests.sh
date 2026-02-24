@@ -44,11 +44,10 @@ ensure_cargo_subcommand() {
   fi
 }
 
-ensure_cargo_subcommand "tarpaulin" "cargo-tarpaulin"
 ensure_cargo_subcommand "audit" "cargo-audit"
 ensure_cargo_subcommand "deny" "cargo-deny"
 
-echo "[0/10] build desktop frontend assets"
+echo "[0/9] build desktop frontend assets"
 build_desktop_frontend_assets
 
 if [[ ! -f CHANGELOG.md ]]; then
@@ -86,16 +85,16 @@ else
   echo "Set CLAVIS_REQUIRE_TAURI_TESTS=1 (or unset) to enforce on all runs."
 fi
 
-echo "[1/10] cargo check --all"
+echo "[1/9] cargo check --all"
 cargo check "${WORKSPACE_ARGS[@]}" --all-features
 
-echo "[2/10] root artifact checks"
+echo "[2/9] root artifact checks"
 test -f CHANGELOG.md
 if [[ -f docs/CHANGELOG.md ]]; then
   echo "docs/CHANGELOG.md must not exist; changelog must remain at repository root"
   exit 1
 fi
-echo "[2/10.1] advisory policy unit tests"
+echo "[2/9.1] advisory policy unit tests"
 "${PYTHON_BIN}" "${ROOT_DIR}/scripts/enforce_advisory_policy_test.py"
 echo "[2/10.2] desktop network policy regression tests"
 "${PYTHON_BIN}" "${ROOT_DIR}/scripts/check_desktop_network_policy_test.py"
@@ -106,13 +105,13 @@ cargo test -p clavisvault-cli tests::session_token_rejects_legacy_plaintext_form
 cargo test -p clavisvault-cli tests::shell_session_export_snippets_handle_shell_specific_quotes
 cargo test -p clavisvault-core tests::updates_file_and_creates_backup
 
-echo "[3/10] cargo clippy --all-targets --all-features -- -D warnings"
+echo "[3/9] cargo clippy --all-targets --all-features -- -D warnings"
 cargo clippy "${WORKSPACE_ARGS[@]}" --all-targets --all-features -- -D warnings
 
-echo "[4/10] cargo test --all"
+echo "[4/9] cargo test --all"
 cargo test "${WORKSPACE_ARGS[@]}" --all-features
 
-echo "[5/10] cargo test --manifest-path crates/desktop/src-tauri/Cargo.toml"
+echo "[5/9] cargo test --manifest-path crates/desktop/src-tauri/Cargo.toml"
 if [[ "$(uname -s)" == "Linux" ]]; then
   if ! command -v pkg-config >/dev/null 2>&1; then
     if [[ "${TAURI_TEST_REQUIRED}" == "1" ]]; then
@@ -150,26 +149,23 @@ else
   exit 1
 fi
 
-echo "[6/10] cargo tarpaulin (core >=95%)"
-cargo tarpaulin --config tarpaulin.toml --package clavisvault-core --lib --fail-under 95
-
-echo "[7/10] cargo deny check bans/licenses/sources"
+echo "[6/9] cargo deny check bans/licenses/sources"
 cargo deny check bans licenses sources
 
-echo "[8/10] enforce advisory policy"
+echo "[7/9] enforce advisory policy"
 "${PYTHON_BIN}" "${ROOT_DIR}/scripts/enforce_advisory_policy.py"
 
-echo "[9/10] cargo audit"
+echo "[8/9] cargo audit"
 cargo audit
 
-echo "[10/10] ensure nightly + cargo-fuzz"
+echo "[9/9] ensure nightly + cargo-fuzz"
 ensure_cargo_subcommand "fuzz" "cargo-fuzz"
 
 if ! rustup toolchain list | grep -q "^nightly"; then
   rustup toolchain install nightly --profile minimal
 fi
 
-echo "[10/10.1] fuzz smoke (core parsers + crypto invariants)"
+echo "[9/9.1] fuzz smoke (core parsers + crypto invariants)"
 pushd crates/core >/dev/null
 cargo +nightly fuzz run vault_blob_parser -- -max_total_time=45 -verbosity=0 -print_final_stats=1
 cargo +nightly fuzz run agents_guarded_section -- -max_total_time=60 -verbosity=0 -print_final_stats=1
