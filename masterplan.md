@@ -49,11 +49,11 @@ Scope: Consolidated check of repository documentation against implementation sta
 | `RUN-THIS-PROMPT.md` | CI smoke check `just ci-fast` | ✅ | `just ci-fast` now executes cleanly in-repo; hygiene, `fmt`, clippy, `machete`, build, and `nextest` all pass |
 | `RUN-THIS-PROMPT.md` | `ci-deep` checklist reflects no mutation testing | ✅ | `RUN-THIS-PROMPT.md:31` |
 | `Justfile` | `ci-deep` excludes mutation testing (`cargo mutants`) from all CI/deep-check flows | ✅ | `Justfile:9` |
-| `docs/SPEC.md` | Distribution includes desktop `.dmg/.exe/.AppImage` artifacts and server/relay packaged binaries | ⚠️ | `docs/SPEC.md:253-254`; workflow/release scripts currently only build workspace release artifacts without packaging/publishing |
-| `docs/SPEC.md` | Server is ready for systemd/Docker deployment paths | ⚠️ | `docs/SPEC.md:213`; `relay-public` contains relay Docker/systemd assets, no server packaging/deployment assets present in current tree |
-| `docs/SPEC.md` | Extreme fuzzing duration is 24h on parsers and crypto invariants | ⚠️ | `docs/SPEC.md:249`; `scripts/run-extreme-tests.sh` and `.ps1` run fuzz targets for 45–60 seconds |
+| `docs/SPEC.md` | Distribution includes desktop `.dmg/.exe/.AppImage` artifacts and server/relay packaged binaries | ✅ | `scripts/release.sh`, `scripts/release.ps1` |
+| `docs/SPEC.md` | Server is ready for systemd/Docker deployment paths | ✅ | `server-public/clavisvault-server.service`, `server-public/docker-compose.yml`, `server-public/Dockerfile` |
+| `docs/SPEC.md` | Extreme fuzzing duration is 24h on parsers and crypto invariants | ✅ | `scripts/run-extreme-tests.sh`, `scripts/run-extreme-tests.ps1` (`CLAVIS_EXTREME_FUZZ_SECONDS` defaults to 86400 outside CI) |
 | `README.md` | No technical claims of unimplemented behavior found | ✅ | `README.md` is user-facing summary only |
-| `docs/alerts.md` | Alert format and polling contract declared but not independently validated in this pass | 🗂 | Document includes example frontmatter; implementation path was validated in prior source pass |
+| `docs/alerts.md` | Alert format and polling contract implementation includes validation path and parser tests | ✅ | `crates/desktop/src-tauri/src/lib.rs` (read + parse logic) plus parser unit tests |
 
 ## Consolidated cleanup actions
 
@@ -73,11 +73,13 @@ Scope: Consolidated check of repository documentation against implementation sta
 
 ## Completion summary
 
-- No direct feature-level requirement from `docs/SPEC.md` appears unimplemented in the core implementation surface; remaining open items are explicit process/distribution scope items tracked above.
-- The current largest gaps are doc-to-code alignment for release/distribution and fuzzing policy targets, not core runtime security or vault feature logic.
+- No direct feature-level requirement from `docs/SPEC.md` appears unimplemented in the core implementation surface.
+- Release/distribution and deployment gaps are now represented in repository assets and scripts (`release.sh/.ps1`, `server-public`, configurable extreme fuzzing controls).
 
 ## Final sweep status (as of 2026-02-24)
 
 - Mutation-testing references in active CI and prompt contracts are removed/neutralized (`ci-deep` no longer runs `cargo mutants`, `RUN-THIS-PROMPT.md` updated, artifacts ignored via `.gitignore`).
+- Release pipeline now builds desktop installers/bundles plus server and relay binaries, and server deployment assets now exist under `server-public/`.
+- Extreme fuzz script controls now support 24h fuzz runtime via `CLAVIS_EXTREME_FUZZ_SECONDS` while CI continues to use a short constrained run.
 - Vendoring checks are clean: no `vendor/` directory, and no Cargo source override is configured for vendored dependencies.
 - No legacy doc-move was applied for original documentation (no `legacy/docs` migration path was used).

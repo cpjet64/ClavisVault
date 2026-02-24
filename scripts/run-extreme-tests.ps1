@@ -9,6 +9,24 @@ if (-not (Get-Command $pythonBin -ErrorAction SilentlyContinue)) {
     $pythonBin = 'python'
 }
 
+if ([string]::IsNullOrWhiteSpace($env:CLAVIS_EXTREME_FUZZ_SECONDS)) {
+    if (-not [string]::IsNullOrWhiteSpace($env:CI)) {
+        $CLAVIS_EXTREME_FUZZ_SECONDS = 60
+    } else {
+        $CLAVIS_EXTREME_FUZZ_SECONDS = 86400
+    }
+} else {
+    try {
+        $CLAVIS_EXTREME_FUZZ_SECONDS = [int]$env:CLAVIS_EXTREME_FUZZ_SECONDS
+        if ($CLAVIS_EXTREME_FUZZ_SECONDS -lt 1) {
+            throw
+        }
+    } catch {
+        Write-Error 'CLAVIS_EXTREME_FUZZ_SECONDS must be a positive integer.'
+        exit 1
+    }
+}
+
 if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
     $homeUser = $env:USERNAME
     if (-not $homeUser) {
@@ -191,12 +209,12 @@ if (-not (rustup toolchain list | Select-String '^nightly')) {
     rustup toolchain install nightly --profile minimal
 }
 
-Write-Output '[9/9.1] fuzz smoke (core parsers + crypto invariants)'
+Write-Output "[9/9.1] fuzz smoke (core parsers + crypto invariants, $($CLAVIS_EXTREME_FUZZ_SECONDS)s each target)"
 Push-Location (Join-Path $rootDir 'crates/core')
-& cargo +nightly fuzz run vault_blob_parser -- -max_total_time=45 -verbosity=0 -print_final_stats=1
-& cargo +nightly fuzz run agents_guarded_section -- -max_total_time=60 -verbosity=0 -print_final_stats=1
-& cargo +nightly fuzz run vault_crypto_roundtrip -- -max_total_time=60 -verbosity=0 -print_final_stats=1
-& cargo +nightly fuzz run session_invariants -- -max_total_time=60 -verbosity=0 -print_final_stats=1
+& cargo +nightly fuzz run vault_blob_parser -- "-max_total_time=$($CLAVIS_EXTREME_FUZZ_SECONDS)" -verbosity=0 -print_final_stats=1
+& cargo +nightly fuzz run agents_guarded_section -- "-max_total_time=$($CLAVIS_EXTREME_FUZZ_SECONDS)" -verbosity=0 -print_final_stats=1
+& cargo +nightly fuzz run vault_crypto_roundtrip -- "-max_total_time=$($CLAVIS_EXTREME_FUZZ_SECONDS)" -verbosity=0 -print_final_stats=1
+& cargo +nightly fuzz run session_invariants -- "-max_total_time=$($CLAVIS_EXTREME_FUZZ_SECONDS)" -verbosity=0 -print_final_stats=1
 Pop-Location
 
 Write-Output 'Extreme testing suite completed successfully.'

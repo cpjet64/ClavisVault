@@ -23,6 +23,19 @@ if ! command -v cargo >/dev/null 2>&1; then
   done
 fi
 
+if [[ -z "${CLAVIS_EXTREME_FUZZ_SECONDS:-}" ]]; then
+  if [[ "${CI:-0}" == "1" ]]; then
+    CLAVIS_EXTREME_FUZZ_SECONDS=60
+  else
+    CLAVIS_EXTREME_FUZZ_SECONDS=86400
+  fi
+fi
+
+if ! [[ "${CLAVIS_EXTREME_FUZZ_SECONDS}" =~ ^[0-9]+$ ]]; then
+  echo "CLAVIS_EXTREME_FUZZ_SECONDS must be a positive integer."
+  exit 1
+fi
+
 ensure_node_tooling() {
   if ! command -v npm >/dev/null 2>&1; then
     echo "npm is required to build desktop frontend assets before Rust gates."
@@ -165,12 +178,12 @@ if ! rustup toolchain list | grep -q "^nightly"; then
   rustup toolchain install nightly --profile minimal
 fi
 
-echo "[9/9.1] fuzz smoke (core parsers + crypto invariants)"
+echo "[9/9.1] fuzz smoke (core parsers + crypto invariants, ${CLAVIS_EXTREME_FUZZ_SECONDS}s each target)"
 pushd crates/core >/dev/null
-cargo +nightly fuzz run vault_blob_parser -- -max_total_time=45 -verbosity=0 -print_final_stats=1
-cargo +nightly fuzz run agents_guarded_section -- -max_total_time=60 -verbosity=0 -print_final_stats=1
-cargo +nightly fuzz run vault_crypto_roundtrip -- -max_total_time=60 -verbosity=0 -print_final_stats=1
-cargo +nightly fuzz run session_invariants -- -max_total_time=60 -verbosity=0 -print_final_stats=1
+cargo +nightly fuzz run vault_blob_parser -- -max_total_time="${CLAVIS_EXTREME_FUZZ_SECONDS}" -verbosity=0 -print_final_stats=1
+cargo +nightly fuzz run agents_guarded_section -- -max_total_time="${CLAVIS_EXTREME_FUZZ_SECONDS}" -verbosity=0 -print_final_stats=1
+cargo +nightly fuzz run vault_crypto_roundtrip -- -max_total_time="${CLAVIS_EXTREME_FUZZ_SECONDS}" -verbosity=0 -print_final_stats=1
+cargo +nightly fuzz run session_invariants -- -max_total_time="${CLAVIS_EXTREME_FUZZ_SECONDS}" -verbosity=0 -print_final_stats=1
 popd >/dev/null
 
 echo "Extreme testing suite completed successfully."

@@ -1,0 +1,14 @@
+services:
+  server:
+    build:
+      context: ..
+      dockerfile: server-public/Dockerfile
+    container_name: clavisvault-server
+    restart: unless-stopped
+    ports:
+      - "51821:51821/udp"
+    volumes:
+      - server-data:/var/lib/clavisvault
+
+volumes:
+  server-data:

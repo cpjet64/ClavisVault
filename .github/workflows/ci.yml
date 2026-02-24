@@ -175,4 +175,5 @@ jobs:
       - name: Run extreme test script
         env:
           CLAVIS_REQUIRE_TAURI_TESTS: "1"
+          CLAVIS_EXTREME_FUZZ_SECONDS: "60"
         run: bash scripts/run-extreme-tests.sh
