@@ -70,6 +70,7 @@ const REMOTE_COMMAND_ERASE: &str = "erase";
 const REMOTE_COMMAND_REVOKE: &str = "revoke";
 const REMOTE_COMMAND_ALLOWED: [&str; 2] = [REMOTE_COMMAND_ERASE, REMOTE_COMMAND_REVOKE];
 const POLICY_FILE_PATH: &str = "policy/secret-policy.toml";
+const MAX_ALERT_DEDUPE_HOURS: i64 = 8_760_000;
 const NOISE_MSG_MAX_BYTES: usize = 64 * 1024;
 const REMOTE_FRAME_MAX_BYTES: usize = 64 * 1024 * 1024;
 const REMOTE_CERTIFICATE_SHA256_LEN: usize = 64;
@@ -2607,7 +2608,11 @@ fn dedupe_active_alerts(mut alerts: Vec<AlertInfo>, now: DateTime<Utc>) -> Vec<A
         if let Some(dedupe_hours) = alert.dedupe_hours
             && let Some(newest) = newest_by_key.get(&key)
             && newest.signed_duration_since(started_at)
-                <= ChronoDuration::hours(dedupe_hours as i64)
+                <= ChronoDuration::hours(
+                    i64::try_from(dedupe_hours)
+                        .unwrap_or(MAX_ALERT_DEDUPE_HOURS)
+                        .min(MAX_ALERT_DEDUPE_HOURS),
+                )
         {
             continue;
         }
@@ -2898,6 +2903,43 @@ message: "Optional update"
                 .iter()
                 .any(|alert| alert.id.as_deref() == Some("same-alert") && alert.version == "0.1.2")
         );
+    }
+
+    #[test]
+    fn dedupe_active_alerts_handles_large_dedupe_hours_without_overflow() {
+        let now = Utc::now();
+        let alerts = vec![
+            AlertInfo {
+                id: Some("overflow-safe".to_string()),
+                version: "1.0.1".to_string(),
+                critical: false,
+                severity: Some("info".to_string()),
+                channel: Some("stable".to_string()),
+                dedupe_hours: Some(u64::MAX),
+                starts_at: Some((now - ChronoDuration::hours(1)).to_rfc3339()),
+                ends_at: None,
+                ack_until_version: None,
+                ack_until_date: None,
+                message: "a".to_string(),
+            },
+            AlertInfo {
+                id: Some("overflow-safe".to_string()),
+                version: "1.0.0".to_string(),
+                critical: false,
+                severity: Some("info".to_string()),
+                channel: Some("stable".to_string()),
+                dedupe_hours: Some(u64::MAX),
+                starts_at: Some((now - ChronoDuration::hours(2)).to_rfc3339()),
+                ends_at: None,
+                ack_until_version: None,
+                ack_until_date: None,
+                message: "a".to_string(),
+            },
+        ];
+
+        let deduped = dedupe_active_alerts(alerts, now);
+        assert_eq!(deduped.len(), 1);
+        assert_eq!(deduped[0].version, "1.0.1");
     }
 
     #[test]
