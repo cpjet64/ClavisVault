@@ -377,6 +377,12 @@ fn parse_args(args: Vec<String>) -> Result<Command> {
 
 fn print_help() {
     println!("clavisvault-relay [--bind 0.0.0.0:51820]");
+    println!(
+        "IMPORTANT: relay is an unauthenticated signaling hop and must be operated as trusted infrastructure."
+    );
+    println!(
+        "The relay cannot decrypt payloads, but it can observe destination hashes, packet rates, and traffic patterns."
+    );
     println!("Custom protocol: [8]CLAVISRL [1]version [2]len [32]sender_pubkey_hash [payload]");
     println!("Public relay example: {PUBLIC_RELAY_EXAMPLE}");
 }
@@ -433,6 +439,9 @@ async fn run_relay(bind_addr: SocketAddr) -> Result<()> {
     let actual_addr = socket.local_addr()?;
     info!("clavisvault-relay listening on {actual_addr}");
     info!("public relay example: {PUBLIC_RELAY_EXAMPLE}");
+    info!(
+        "trust boundary: do not run untrusted workloads with this relay; it forwards ClavisVault relay packets only and does not authenticate peers"
+    );
     info!(
         "protocol active (magic=CLAVISRL version={} rate_limit={}pkt/s)",
         PROTOCOL_VERSION, RATE_LIMIT_PACKETS_PER_SECOND

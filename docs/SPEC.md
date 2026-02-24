@@ -219,12 +219,22 @@ Only forwards packets starting with magic b"CLAVISRL" + version 1 + sender pubke
 Rate-limit 50 pkt/s per IP.  
 Never decrypts or stores payload.  
 Pure signalling + hole-punch helper.  
+Trust boundary: relay must be operated as trusted infrastructure because it observes packet metadata and can act as a forwarding path.
 Public instance: relay.clavisvault.app:51820  
 Self-host option fully supported.
 
 Custom protocol (anti-abuse)
 Every packet:  
 [8] CLAVISRL | [1] version | [2] len | [32] sender_pubkey_hash | [payload]
+
+Relay deployment guidance:
+- `clavisvault-relay` is unauthenticated and performs protocol-level validation only.
+- It cannot decrypt any end-to-end payload content, but can observe:
+  - sender source endpoint and source packet rates
+  - 32-byte sender hash and any target-hash hints in payload preamble
+  - total packet volume and fanout behavior
+- Production relays must be treated as trusted network infrastructure.
+- For stricter environments, operators should limit relay exposure and rotate relay hostname/IP as part of operational hardening.
 
 ## 6. Additional Polish (implemented in desktop + core)
 - Launch on startup + launch minimized

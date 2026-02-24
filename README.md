@@ -5,6 +5,10 @@
 Store API keys once. Never commit them again. Auto-inject into agents.md / OpenClaw.  
 Cross-platform (Windows/macOS/Linux). Rust + Tauri. End-to-end encrypted.
 
+## Security Model
+
+The relay is strictly an unauthenticated signalling hop for P2P transport discovery. It cannot decrypt payload contents, but it can observe packet metadata and forwarding patterns; run relays only as trusted infrastructure.
+
 ## Quick Start
 1. Download from GitHub Releases
 2. Run → set master password

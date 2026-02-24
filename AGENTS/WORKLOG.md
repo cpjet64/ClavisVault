@@ -1,15 +1,13 @@
 # Worklog
 
 ## Now
-- Continue relay trust-boundary hardening and load behavior validation under flood and malformed traffic conditions.
-- Keep validating relay trust-boundary and TTL/scoping behavior under load.
+- Validate relay trust-boundary and TTL/scoping behavior under load; close remaining relay trust-boundary documentation loop.
 
 ## Next
-- Continue deep-dive security sweep: finalize relay trust-boundary documentation and explicit trust-boundary signaling in docs.
+- Continue relay trust-boundary hardening and malformed-traffic handling edge cases from live behavior checks.
 - Run a repository-wide pass for remaining high-confidence security TODOs and update evidence.
 
 ## Later
-- Finalize relay trust-boundary documentation updates and any remaining migration notes in `docs/SPEC.md` and `README.md`.
 - Optional: triage low-risk follow-up hardening based on future findings.
 
 ## Done
@@ -47,6 +45,9 @@
   - Added tests for source-peer quota and full peer table rejection.
 - Added relay burst-flood regression coverage:
   - New `source_rate_limit_blocks_bursts_per_ip` test verifies per-source IP rate limiting returns `SourceRateLimit` under burst conditions and recovers after window expiry.
+- Added relay trust-boundary signaling and docs updates:
+  - `clavisvault-relay` help/startup now explicitly states unauthenticated forwarding boundary assumptions.
+  - `docs/SPEC.md` and `README.md` now document relay trust boundary expectations for operators.
 
 ## Decisions Needed
 - Export signer persistence location and migration model: server-side keyring + explicit migration mode or dedicated CLI-managed trust file.
