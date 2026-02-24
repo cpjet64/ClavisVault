@@ -49,8 +49,6 @@ Scope: Consolidated check of repository documentation against implementation sta
 | `RUN-THIS-PROMPT.md` | Python checks require project-wide pyproject/uv policy by default | ✅ | Document now documents dependency-manager scope so utility-script repos can skip as applicable |
 | `RUN-THIS-PROMPT.md` | Git hooks checks require core.hooksPath + executable scripts | ✅ | `git config core.hooksPath` returns `.githooks`; hooks call `just ci-fast`/`ci-deep`; git index shows mode `100755` for both scripts |
 | `RUN-THIS-PROMPT.md` | CI smoke check `just ci-fast` | ✅ | `just ci-fast` now executes cleanly in-repo; hygiene, `fmt`, clippy, `machete`, build, and `nextest` all pass |
-| `RUN-THIS-PROMPT.md` | `ci-deep` checklist reflects no mutation testing | ✅ | `RUN-THIS-PROMPT.md:31` |
-| `Justfile` | `ci-deep` excludes mutation testing (`cargo mutants`) from all CI/deep-check flows | ✅ | `Justfile:9` |
 | `docs/SPEC.md` | Distribution includes desktop `.dmg/.exe/.AppImage` artifacts and server/relay packaged binaries | ✅ | `scripts/release.sh`, `scripts/release.ps1` |
 | `docs/SPEC.md` | Server is ready for systemd/Docker deployment paths | ✅ | `server-public/clavisvault-server.service`, `server-public/docker-compose.yml`, `server-public/Dockerfile` |
 | `docs/SPEC.md` | Extreme fuzzing duration is 24h on parsers and crypto invariants | ✅ | `scripts/run-extreme-tests.sh`, `scripts/run-extreme-tests.ps1` (`CLAVIS_EXTREME_FUZZ_SECONDS` defaults to 86400 outside CI) |
@@ -61,10 +59,6 @@ Scope: Consolidated check of repository documentation against implementation sta
 
 - Keep explicit policy decision in `RUN-THIS-PROMPT.md` for when Python-only utility scripts should be exceptioned from dependency-manager checks.
 - No original documentation files were moved to `legacy/docs`; all source docs were consolidated in place and normalized for implementation verification.
-- Removed mutation testing from the `ci-deep` path to avoid shell-incompatible failure modes in this repository and keep CI deterministically runnable across dev shells.
-- Updated `RUN-THIS-PROMPT.md` deep-CI checklist so it no longer includes `mutants`.
-- Added `mutants.out/` to `.gitignore` so mutation-testing artifacts from local runs stay untracked.
-
 ## Vendoring audit
 
 - No vendored dependency bundle directory was found in the repository (`vendor/` not present).
@@ -80,7 +74,6 @@ Scope: Consolidated check of repository documentation against implementation sta
 
 ## Final sweep status (as of 2026-02-24)
 
-- Mutation-testing references in active CI and prompt contracts are removed/neutralized (`ci-deep` no longer runs `cargo mutants`, `RUN-THIS-PROMPT.md` updated, artifacts ignored via `.gitignore`).
 - Release pipeline now builds desktop installers/bundles plus server and relay binaries, and server deployment assets now exist under `server-public/`.
 - Extreme fuzz script controls now support 24h fuzz runtime via `CLAVIS_EXTREME_FUZZ_SECONDS` while CI continues to use a short constrained run.
 - Vendoring checks are clean: no `vendor/` directory, and no Cargo source override is configured for vendored dependencies.
