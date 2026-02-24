@@ -34,7 +34,7 @@ class ValidateAuditExceptionsTests(unittest.TestCase):
 
                 [[advisories.ignore]]
                 id = "RUSTSEC-2027-0002"
-                reason = "expiry: 2027-01-15; rationale: vendor backport under review."
+                reason = "expiry: 2027-01-15; rationale: third-party backport under review."
                 """
             ).strip()
         )

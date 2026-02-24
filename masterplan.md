@@ -59,14 +59,6 @@ Scope: Consolidated check of repository documentation against implementation sta
 
 - Keep explicit policy decision in `RUN-THIS-PROMPT.md` for when Python-only utility scripts should be exceptioned from dependency-manager checks.
 - No original documentation files were moved to `legacy/docs`; all source docs were consolidated in place and normalized for implementation verification.
-## Vendoring audit
-
-- No vendored dependency bundle directory was found in the repository (`vendor/` not present).
-- No Cargo source override to a vendored source was found in `.cargo/config.toml` or `Cargo.toml` (`replace-with`/`source.<name>` overrides absent).
-- No local path source remapping was found in `Cargo.lock` scan (dependency sources remain registry-only).
-- `masterplan.md` does not include copied implementation bodies; it tracks each item as a claim + evidence pointer only.
-- Remaining actionable items are tracked as mismatches/process gaps, not duplicated feature specs.
-
 ## Completion summary
 
 - No direct feature-level requirement from `docs/SPEC.md` appears unimplemented in the core implementation surface.
@@ -76,7 +68,6 @@ Scope: Consolidated check of repository documentation against implementation sta
 
 - Release pipeline now builds desktop installers/bundles plus server and relay binaries, and server deployment assets now exist under `server-public/`.
 - Extreme fuzz script controls now support 24h fuzz runtime via `CLAVIS_EXTREME_FUZZ_SECONDS` while CI continues to use a short constrained run.
-- Vendoring checks are clean: no `vendor/` directory, and no Cargo source override is configured for vendored dependencies.
 - No legacy doc-move was applied for original documentation (no `legacy/docs` migration path was used).
 
 ## 2026-02-24 Extended Feature Pass
