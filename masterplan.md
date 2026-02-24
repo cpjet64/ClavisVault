@@ -97,6 +97,7 @@ Scope: Consolidated check of repository documentation against implementation sta
 - Server now supports token scope/revocation semantics (`scp`, `jti`, `rid`) and remote `revoke` command.
 - CLI expanded with `rotate-key`, `policy check`, `audit verify`, and `recovery-drill`.
 - Alert schema expanded in `docs/alerts.md` with structured metadata fields (`id`, `severity`, `channel`, `dedupe_hours`, schedules, ack hints).
+- Alert runtime now applies `dedupe_hours` suppression windows and alert-level ack-default hints during update checks (`crates/desktop/src-tauri/src/lib.rs`, covered by unit tests).
 
 ## Nice-to-have feature completion matrix (8/8)
 
