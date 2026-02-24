@@ -36,6 +36,8 @@ const DEFAULT_BIND_ADDR: &str = "0.0.0.0:51821";
 
 const PAIRING_TTL_MINUTES: i64 = 5;
 const TOKEN_TTL_DAYS: i64 = 90;
+const MIN_TOKEN_TTL_SECONDS: i64 = 60;
+const MAX_TOKEN_TTL_SECONDS: i64 = TOKEN_TTL_DAYS * 24 * 60 * 60;
 const PAIRING_CODE_LEN: usize = 8;
 const ED25519_SIGNING_KEY_LEN: usize = 32;
 const NOISE_MSG_MAX_BYTES: usize = 64 * 1024;
@@ -500,9 +502,10 @@ fn issue_signed_jwt_token_with_policy(
     ttl_seconds: Option<i64>,
 ) -> Result<TokenRecord> {
     let now = Utc::now();
-    let exp = ttl_seconds
-        .map(|seconds| now + ChronoDuration::seconds(seconds.max(60)))
-        .unwrap_or_else(|| now + ChronoDuration::days(TOKEN_TTL_DAYS));
+    let ttl = ttl_seconds
+        .unwrap_or(MAX_TOKEN_TTL_SECONDS)
+        .clamp(MIN_TOKEN_TTL_SECONDS, MAX_TOKEN_TTL_SECONDS);
+    let exp = now + ChronoDuration::seconds(ttl);
     let token_id = random_client_fingerprint();
     let rid = remote_id.clone().unwrap_or_default();
     let header = r#"{"alg":"EdDSA","typ":"JWT"}"#;
@@ -692,7 +695,9 @@ fn verify_or_pair(
             ]
         }),
         policy.remote_id.map(std::string::ToString::to_string),
-        policy.session_ttl_seconds.map(|ttl| ttl as i64),
+        policy
+            .session_ttl_seconds
+            .map(|ttl| i64::try_from(ttl).unwrap_or(i64::MAX)),
     )?;
     state.pairing = None;
     Ok(Some(issued.token))
@@ -2084,5 +2089,40 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn issue_token_caps_extreme_ttl_values() {
+        let mut state = ServerStateFile::default();
+        let now = Utc::now();
+        let token_record = issue_signed_jwt_token_with_policy(
+            &mut state,
+            vec!["push".to_string()],
+            None,
+            Some(i64::MAX),
+        )
+        .expect("issue token should work");
+
+        let ttl = token_record
+            .expires_at
+            .signed_duration_since(now)
+            .num_seconds();
+        assert!(ttl <= MAX_TOKEN_TTL_SECONDS);
+        assert!(ttl >= MIN_TOKEN_TTL_SECONDS);
+    }
+
+    #[test]
+    fn issue_token_applies_minimum_ttl_floor() {
+        let mut state = ServerStateFile::default();
+        let now = Utc::now();
+        let token_record =
+            issue_signed_jwt_token_with_policy(&mut state, vec!["push".to_string()], None, Some(1))
+                .expect("issue token should work");
+
+        let ttl = token_record
+            .expires_at
+            .signed_duration_since(now)
+            .num_seconds();
+        assert!(ttl >= MIN_TOKEN_TTL_SECONDS);
     }
 }
