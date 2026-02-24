@@ -5,14 +5,16 @@
 - Core verification remains green and no implementation stubs are active in production code.
 - Completed final panic/unreachable sweep focused on runtime crash risk in non-test code paths.
 - Latest sweep shows only docs placeholders (`docs/SPEC.md`, `docs/alerts.md`) and test-only panics/unreachables remain.
+- New coverage-hardening work has started for explicit `100%` target in core crate (`AGENTS/COVERAGE_100_TODO.md`).
 
 ## Next
-- Proceed to optional low-priority maintenance backlog only if a specific trigger appears (coverage policy changes, new advisories, or explicit user request).
-- Keep periodic checks for regressions in docs/spec sync.
+- Execute `AGENTS/COVERAGE_100_TODO.md` to reach 100% core coverage, then reconcile with gate expectations.
+- Track platform-dependent exceptions with in-code `COVERAGE NOTE` comments and tolerances.
 
 ## Later
 - Expand routine security posture review if dependency policy or release requirements change.
 - Optional periodic review of advisory exceptions and relay/desktop runtime threat assumptions.
+- Once 100% core coverage is reached, extend the plan to `server` and `desktop` integration surface coverage.
 
 ## Done
 - Re-ran `rg` panic/unreachable risk sweep in production candidate paths.
@@ -29,6 +31,7 @@
 ## Evidence
 - `rg -n "panic!\(|unreachable!\(" crates`
 - `just ci-fast` baseline gates from earlier cycle remain green (`just ci-fast`: 258 tests passed, 0 failed) and no new regression was introduced during this step.
+- `cargo llvm-cov --package clavisvault-core --lib --summary-only` (currently: 87.56% line, 79.16% function coverage; logged separately in `AGENTS/COVERAGE_100_TODO.md`).
 
 ## Assumptions
 - `AGENTS/WORKLOG.md` is the canonical worklist due existing `AGENTS/` directory.
