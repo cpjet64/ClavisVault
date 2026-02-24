@@ -1,16 +1,20 @@
 # Worklog
 
 ## Now
-- Implement explicit failure behavior when CLI session token signing keyring continuity is unavailable.
+- Continue deep-dive security sweep: complete server scope enforcement coverage across command, pairing, and revocation mismatch paths.
 
 ## Next
-- Continue deep-dive security sweep: server scope enforcement canonical checks and recovery drill continuity.
+- Continue deep-dive security sweep: relay trust-boundary hardening and scope/TTL mismatch checks under load.
 - Run a repository-wide pass for remaining high-confidence security TODOs and update evidence.
-- Add CI-safe negative tests for keyring-missing startup paths if feasible.
 
 ## Later
 - Finalize relay trust-boundary documentation updates and any remaining migration notes in `docs/SPEC.md` and `README.md`.
 - Optional: triage low-risk follow-up hardening based on future findings.
+
+## Done
+- Implemented remote scope propagation from desktop settings into pairing and push payloads, plus server-side scope enforcement and TTL policy mapping.
+- Added request validation and normalization for remote permissions/scopes; fixed compile regressions and stabilized the slice with unit coverage.
+- Added desktop startup normalization so invalid legacy permission values now fail closed with explicit mapping errors.
 
 ## Done
 - Removed silent fallback for missing session signing key in CLI keyring:

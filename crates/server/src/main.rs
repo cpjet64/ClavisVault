@@ -45,6 +45,9 @@ const PUSH_FRAME_MAX_BYTES: usize = 64 * 1024 * 1024;
 const REMOTE_COMMAND_ERASE: &str = "erase";
 const REMOTE_COMMAND_REVOKE: &str = "revoke";
 const REMOTE_COMMAND_ALLOWED: [&str; 2] = [REMOTE_COMMAND_ERASE, REMOTE_COMMAND_REVOKE];
+const REMOTE_SCOPE_PUSH: &str = "push";
+const REMOTE_SCOPE_ERASE: &str = "erase";
+const REMOTE_SCOPE_REVOKE: &str = "revoke";
 
 #[derive(Debug, Clone)]
 struct ServerPaths {
@@ -152,6 +155,10 @@ struct PushRequest {
     server_fingerprint: Option<String>,
     command: Option<String>,
     reason: Option<String>,
+    #[serde(default)]
+    requested_scopes: Option<Vec<String>>,
+    #[serde(default)]
+    session_ttl_seconds: Option<u64>,
     encrypted_vault_hex: String,
 }
 
@@ -644,6 +651,34 @@ fn verify_token_with_scope(
     Ok(())
 }
 
+fn normalize_requested_scopes(raw_scopes: Option<Vec<String>>) -> Result<Option<Vec<String>>> {
+    let Some(raw_scopes) = raw_scopes else {
+        return Ok(None);
+    };
+
+    if raw_scopes.is_empty() {
+        bail!("requested scopes cannot be empty");
+    }
+
+    let mut scopes = Vec::new();
+    for scope in raw_scopes {
+        match scope.as_str() {
+            REMOTE_SCOPE_PUSH | REMOTE_SCOPE_ERASE | REMOTE_SCOPE_REVOKE => {
+                if !scopes.iter().any(|existing| existing == &scope) {
+                    scopes.push(scope);
+                }
+            }
+            _ => bail!("invalid requested scope: {scope}"),
+        }
+    }
+
+    if scopes.is_empty() {
+        bail!("requested scopes cannot be empty");
+    }
+
+    Ok(Some(scopes))
+}
+
 struct PairingPolicy<'a> {
     required_scope: &'a str,
     remote_id: Option<&'a str>,
@@ -776,6 +811,7 @@ fn handle_vault_push(
     state: &mut ServerStateFile,
     request: PushRequest,
 ) -> Result<PushResponse> {
+    let requested_scopes = normalize_requested_scopes(request.requested_scopes)?;
     let command = request.command.as_deref().unwrap_or("").trim();
     validate_remote_command(command)?;
     let required_scope = if command == REMOTE_COMMAND_ERASE {
@@ -808,8 +844,8 @@ fn handle_vault_push(
         PairingPolicy {
             required_scope,
             remote_id: Some(client_fingerprint.as_str()),
-            scopes: None,
-            session_ttl_seconds: None,
+            scopes: requested_scopes,
+            session_ttl_seconds: request.session_ttl_seconds,
         },
     )?;
     let allow_initial_bind = !has_session_token && request.pairing_code.is_some();
@@ -907,6 +943,8 @@ fn push_simulation(
         server_fingerprint,
         command: None,
         reason: None,
+        requested_scopes: None,
+        session_ttl_seconds: None,
         encrypted_vault_hex: hex_of(&bytes),
     };
     let responder_private_key = noise_static_secret(&mut state)?;
@@ -1395,6 +1433,8 @@ mod tests {
             server_fingerprint: None,
             command: None,
             reason: None,
+            requested_scopes: None,
+            session_ttl_seconds: None,
             encrypted_vault_hex: hex_of(&encrypted_vault),
         };
         let pair_response =
@@ -1417,6 +1457,8 @@ mod tests {
             ),
             command: None,
             reason: None,
+            requested_scopes: None,
+            session_ttl_seconds: None,
             encrypted_vault_hex: hex_of(&encrypted_vault),
         };
 
@@ -1450,6 +1492,180 @@ mod tests {
         assert_eq!(header_json["typ"], "JWT");
 
         verify_jwt_signature(&state, &record.token).expect("token signature should verify");
+    }
+
+    #[test]
+    fn requested_scopes_are_honored_on_pairing() {
+        let root = temp_dir("requested-scopes");
+        let paths = sample_paths(&root);
+        let mut state = ServerStateFile::default();
+        let mut salt = [0_u8; 16];
+        rand::rngs::OsRng.fill_bytes(&mut salt);
+        let key = derive_master_key("pw-scope", &salt).expect("derive should work");
+        let encrypted = lock_vault(paths.vault_file.clone(), &VaultData::new(salt), &key)
+            .expect("encrypt should work");
+        let encrypted_vault = encrypted.to_bytes().expect("vault bytes should serialize");
+        state.password = Some(PasswordRecord {
+            salt,
+            digest_hex: hex_of(Sha256::digest(key.as_slice()).as_ref()),
+        });
+        let challenge = ensure_pairing_challenge(&mut state);
+
+        let pair_request = PushRequest {
+            token: None,
+            pairing_code: Some(format!("{}-{}", challenge.code, challenge.checksum)),
+            password: Some("pw-scope".to_string()),
+            client_fingerprint: Some("scope-client".to_string()),
+            server_fingerprint: None,
+            command: None,
+            reason: None,
+            requested_scopes: Some(vec!["push".to_string(), "push".to_string()]),
+            session_ttl_seconds: None,
+            encrypted_vault_hex: hex_of(&encrypted_vault),
+        };
+
+        let response =
+            handle_vault_push(&paths, &mut state, pair_request).expect("pairing should work");
+        let token = response.issued_token.expect("pairing should issue token");
+        let token_scopes = state
+            .token
+            .as_ref()
+            .expect("token should be written to state")
+            .scopes
+            .clone();
+        assert_eq!(token_scopes, vec!["push".to_string()]);
+
+        let erase_request = PushRequest {
+            token: Some(token),
+            pairing_code: None,
+            password: None,
+            client_fingerprint: Some("scope-client".to_string()),
+            server_fingerprint: Some(
+                state
+                    .bound_server_fingerprint
+                    .clone()
+                    .expect("pairing should bind server fingerprint"),
+            ),
+            command: Some(REMOTE_COMMAND_ERASE.to_string()),
+            reason: Some("scope check".to_string()),
+            requested_scopes: None,
+            session_ttl_seconds: None,
+            encrypted_vault_hex: hex_of(&encrypted_vault),
+        };
+
+        assert!(handle_vault_push(&paths, &mut state, erase_request).is_err());
+    }
+
+    #[test]
+    fn requested_scopes_reject_unknown_scopes() {
+        let root = temp_dir("invalid-requested-scopes");
+        let paths = sample_paths(&root);
+        let mut state = ServerStateFile::default();
+        let mut salt = [0_u8; 16];
+        rand::rngs::OsRng.fill_bytes(&mut salt);
+        let key = derive_master_key("pw-scope-bad", &salt).expect("derive should work");
+        let encrypted = lock_vault(paths.vault_file.clone(), &VaultData::new(salt), &key)
+            .expect("encrypt should work");
+        let encrypted_vault = encrypted.to_bytes().expect("serialize should work");
+        state.password = Some(PasswordRecord {
+            salt,
+            digest_hex: hex_of(Sha256::digest(key.as_slice()).as_ref()),
+        });
+        let challenge = ensure_pairing_challenge(&mut state);
+
+        let pair_request = PushRequest {
+            token: None,
+            pairing_code: Some(format!("{}-{}", challenge.code, challenge.checksum)),
+            password: Some("pw-scope-bad".to_string()),
+            client_fingerprint: Some("scope-client-bad".to_string()),
+            server_fingerprint: None,
+            command: None,
+            reason: None,
+            requested_scopes: Some(vec!["push".to_string(), "invalid-scope".to_string()]),
+            session_ttl_seconds: None,
+            encrypted_vault_hex: hex_of(&encrypted_vault),
+        };
+
+        assert!(handle_vault_push(&paths, &mut state, pair_request).is_err());
+        assert!(state.token.is_none());
+    }
+
+    #[test]
+    fn requested_session_ttl_is_clamped_to_token_policy() {
+        let root = temp_dir("requested-ttl-floor");
+        let paths = sample_paths(&root);
+        let mut state = ServerStateFile::default();
+        let mut salt = [0_u8; 16];
+        rand::rngs::OsRng.fill_bytes(&mut salt);
+        let key = derive_master_key("pw-scope-ttl", &salt).expect("derive should work");
+        let encrypted = lock_vault(paths.vault_file.clone(), &VaultData::new(salt), &key)
+            .expect("encrypt should work");
+        let encrypted_vault = encrypted.to_bytes().expect("serialize should work");
+        state.password = Some(PasswordRecord {
+            salt,
+            digest_hex: hex_of(Sha256::digest(key.as_slice()).as_ref()),
+        });
+        let challenge = ensure_pairing_challenge(&mut state);
+
+        let pair_request = PushRequest {
+            token: None,
+            pairing_code: Some(format!("{}-{}", challenge.code, challenge.checksum)),
+            password: Some("pw-scope-ttl".to_string()),
+            client_fingerprint: Some("ttl-client".to_string()),
+            server_fingerprint: None,
+            command: None,
+            reason: None,
+            requested_scopes: Some(vec![
+                "push".to_string(),
+                "erase".to_string(),
+                "revoke".to_string(),
+            ]),
+            session_ttl_seconds: Some(1),
+            encrypted_vault_hex: hex_of(&encrypted_vault),
+        };
+        let issued_at = Utc::now();
+        let _ = handle_vault_push(&paths, &mut state, pair_request).expect("pairing should work");
+        let token_ttl = state
+            .token
+            .as_ref()
+            .expect("token should be written")
+            .expires_at
+            .signed_duration_since(issued_at)
+            .num_seconds();
+        assert!(token_ttl >= MIN_TOKEN_TTL_SECONDS);
+
+        let challenge = ensure_pairing_challenge(&mut state);
+        let pair_request = PushRequest {
+            token: None,
+            pairing_code: Some(format!("{}-{}", challenge.code, challenge.checksum)),
+            password: Some("pw-scope-ttl".to_string()),
+            client_fingerprint: Some("ttl-client".to_string()),
+            server_fingerprint: Some(
+                state
+                    .bound_server_fingerprint
+                    .clone()
+                    .expect("pairing should bind server fingerprint"),
+            ),
+            command: None,
+            reason: None,
+            requested_scopes: Some(vec![
+                "push".to_string(),
+                "erase".to_string(),
+                "revoke".to_string(),
+            ]),
+            session_ttl_seconds: Some(u64::MAX),
+            encrypted_vault_hex: hex_of(&encrypted_vault),
+        };
+        let issued_at = Utc::now();
+        let _ = handle_vault_push(&paths, &mut state, pair_request).expect("pairing should work");
+        let token_ttl = state
+            .token
+            .as_ref()
+            .expect("token should be written")
+            .expires_at
+            .signed_duration_since(issued_at)
+            .num_seconds();
+        assert!(token_ttl <= MAX_TOKEN_TTL_SECONDS + 1);
     }
 
     #[test]
@@ -1493,6 +1709,8 @@ mod tests {
             server_fingerprint: None,
             command: None,
             reason: None,
+            requested_scopes: None,
+            session_ttl_seconds: None,
             encrypted_vault_hex: hex_of(&bytes),
         };
 
@@ -1532,6 +1750,8 @@ mod tests {
             server_fingerprint: None,
             command: None,
             reason: None,
+            requested_scopes: None,
+            session_ttl_seconds: None,
             encrypted_vault_hex: hex_of(&bytes),
         };
 
@@ -1572,6 +1792,8 @@ mod tests {
             server_fingerprint: None,
             command: None,
             reason: None,
+            requested_scopes: None,
+            session_ttl_seconds: None,
             encrypted_vault_hex: hex_of(&bytes),
         };
 
@@ -1591,6 +1813,8 @@ mod tests {
             server_fingerprint: None,
             command: None,
             reason: None,
+            requested_scopes: None,
+            session_ttl_seconds: None,
             encrypted_vault_hex: hex_of(&bytes),
         };
         assert!(handle_vault_push(&paths, &mut state, missing_fingerprint).is_err());
@@ -1603,6 +1827,8 @@ mod tests {
             server_fingerprint: Some(server_fingerprint.clone()),
             command: None,
             reason: None,
+            requested_scopes: None,
+            session_ttl_seconds: None,
             encrypted_vault_hex: hex_of(&bytes),
         };
         assert!(handle_vault_push(&paths, &mut state, wrong_fingerprint).is_err());
@@ -1615,6 +1841,8 @@ mod tests {
             server_fingerprint: Some(server_fingerprint),
             command: None,
             reason: None,
+            requested_scopes: None,
+            session_ttl_seconds: None,
             encrypted_vault_hex: hex_of(&bytes),
         };
         assert!(handle_vault_push(&paths, &mut state, matched).is_ok());
@@ -1627,6 +1855,8 @@ mod tests {
             server_fingerprint: Some(bound_server_fingerprint),
             command: None,
             reason: None,
+            requested_scopes: None,
+            session_ttl_seconds: None,
             encrypted_vault_hex: hex_of(&bytes),
         };
         assert!(handle_vault_push(&paths, &mut state, bound_remote_request).is_err());
@@ -1642,6 +1872,8 @@ mod tests {
             server_fingerprint: None,
             command: None,
             reason: None,
+            requested_scopes: None,
+            session_ttl_seconds: None,
             encrypted_vault_hex: "00ff".to_string(),
         };
 
@@ -1662,6 +1894,8 @@ mod tests {
             server_fingerprint: None,
             command: None,
             reason: None,
+            requested_scopes: None,
+            session_ttl_seconds: None,
             encrypted_vault_hex: "aabbccdd".to_string(),
         };
         let encoded = serde_json::to_vec(&payload).expect("payload encoding should work");
@@ -1775,6 +2009,8 @@ mod tests {
             server_fingerprint: None,
             command: None,
             reason: None,
+            requested_scopes: None,
+            session_ttl_seconds: None,
             encrypted_vault_hex: hex_of(&encrypted.to_bytes().expect("serialize")),
         };
         let pair_response =
@@ -1798,6 +2034,8 @@ mod tests {
             ),
             command: Some("unknown-command".to_string()),
             reason: Some("tests cleanup".to_string()),
+            requested_scopes: None,
+            session_ttl_seconds: None,
             encrypted_vault_hex: String::new(),
         };
         assert!(handle_vault_push(&paths, &mut state, erase_request).is_err());
@@ -1836,6 +2074,8 @@ mod tests {
             server_fingerprint: None,
             command: None,
             reason: None,
+            requested_scopes: None,
+            session_ttl_seconds: None,
             encrypted_vault_hex: hex_of(&encrypted.to_bytes().expect("serialize")),
         };
         let pair_response =
@@ -1858,6 +2098,8 @@ mod tests {
             ),
             command: Some(REMOTE_COMMAND_ERASE.to_string()),
             reason: Some("tests cleanup".to_string()),
+            requested_scopes: None,
+            session_ttl_seconds: None,
             encrypted_vault_hex: hex_of(&encrypted.to_bytes().expect("serialize")),
         };
         let response =
@@ -1896,6 +2138,8 @@ mod tests {
             server_fingerprint: None,
             command: None,
             reason: None,
+            requested_scopes: None,
+            session_ttl_seconds: None,
             encrypted_vault_hex: hex_of(&encrypted.to_bytes().expect("serialize")),
         };
         let pair_response =
@@ -1919,6 +2163,8 @@ mod tests {
             ),
             command: Some(REMOTE_COMMAND_ERASE.to_string()),
             reason: Some("tests cleanup".to_string()),
+            requested_scopes: None,
+            session_ttl_seconds: None,
             encrypted_vault_hex: String::new(),
         };
         assert!(handle_vault_push(&paths, &mut state, erase_request).is_err());
@@ -1958,6 +2204,8 @@ mod tests {
             server_fingerprint: None,
             command: None,
             reason: None,
+            requested_scopes: None,
+            session_ttl_seconds: None,
             encrypted_vault_hex: hex_of(&encrypted.to_bytes().expect("serialize")),
         };
         let pair_response =
@@ -1981,6 +2229,8 @@ mod tests {
             ),
             command: Some(REMOTE_COMMAND_ERASE.to_string()),
             reason: Some("tests cleanup".to_string()),
+            requested_scopes: None,
+            session_ttl_seconds: None,
             encrypted_vault_hex: "not-a-hex-payload".to_string(),
         };
         assert!(handle_vault_push(&paths, &mut state, erase_request).is_err());
@@ -2026,6 +2276,8 @@ mod tests {
             server_fingerprint: None,
             command: None,
             reason: None,
+            requested_scopes: None,
+            session_ttl_seconds: None,
             encrypted_vault_hex: "not-a-hex-payload".to_string(),
         };
 
@@ -2058,6 +2310,8 @@ mod tests {
             server_fingerprint: None,
             command: None,
             reason: None,
+            requested_scopes: None,
+            session_ttl_seconds: None,
             encrypted_vault_hex: hex_of(&encrypted.to_bytes().expect("serialize")),
         };
 

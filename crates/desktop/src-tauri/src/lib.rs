@@ -69,6 +69,9 @@ const TRAY_OPEN_ID: &str = "tray-open";
 const TRAY_LOCK_ID: &str = "tray-lock";
 const TRAY_UPDATES_ID: &str = "tray-updates";
 const TRAY_QUIT_ID: &str = "tray-quit";
+const REMOTE_SCOPE_PUSH: &str = "push";
+const REMOTE_SCOPE_ERASE: &str = "erase";
+const REMOTE_SCOPE_REVOKE: &str = "revoke";
 const REMOTE_COMMAND_ERASE: &str = "erase";
 const REMOTE_COMMAND_REVOKE: &str = "revoke";
 const REMOTE_COMMAND_ALLOWED: [&str; 2] = [REMOTE_COMMAND_ERASE, REMOTE_COMMAND_REVOKE];
@@ -97,6 +100,10 @@ struct RemotePushRequest {
     client_fingerprint: Option<String>,
     command: Option<String>,
     reason: Option<String>,
+    #[serde(default)]
+    requested_scopes: Option<Vec<String>>,
+    #[serde(default)]
+    session_ttl_seconds: Option<u64>,
     encrypted_vault_hex: String,
 }
 
@@ -1308,9 +1315,11 @@ fn ensure_settings_defaults(mut settings: DesktopSettings) -> Result<DesktopSett
     }
 
     for remote in &mut settings.remotes {
-        if remote.permissions.trim().is_empty() {
+        remote.permissions = remote.permissions.trim().to_ascii_lowercase();
+        if remote.permissions.is_empty() {
             remote.permissions = "full".to_string();
         }
+        remote_requested_scopes(&remote.permissions)?;
         if remote.session_ttl_seconds == 0 {
             remote.session_ttl_seconds = 86_400;
         }
@@ -1333,6 +1342,23 @@ fn ensure_settings_defaults(mut settings: DesktopSettings) -> Result<DesktopSett
     Ok(settings)
 }
 
+fn remote_requested_scopes(permission: &str) -> Result<Vec<String>> {
+    let permission = permission.trim().to_ascii_lowercase();
+    Ok(match permission.as_str() {
+        "full" => vec![
+            REMOTE_SCOPE_PUSH.to_string(),
+            REMOTE_SCOPE_ERASE.to_string(),
+            REMOTE_SCOPE_REVOKE.to_string(),
+        ],
+        "push_only" => vec![
+            REMOTE_SCOPE_PUSH.to_string(),
+            REMOTE_SCOPE_REVOKE.to_string(),
+        ],
+        "read_only" => vec![REMOTE_SCOPE_REVOKE.to_string()],
+        _ => bail!("unsupported remote permission policy: {permission}"),
+    })
+}
+
 fn remote_payload_to_hex(payload: &[u8]) -> String {
     hex_of(payload)
 }
@@ -1344,18 +1370,21 @@ fn build_remote_request(
     command: Option<&str>,
     reason: Option<&str>,
     encrypted_vault_hex: String,
-) -> RemotePushRequest {
+) -> Result<RemotePushRequest> {
+    let requested_scopes = remote_requested_scopes(&remote.permissions)?;
     let command = command.map(std::string::ToString::to_string);
     let reason = reason.map(std::string::ToString::to_string);
-    RemotePushRequest {
+    Ok(RemotePushRequest {
         token: remote_session_token(remote),
         pairing_code: pairing_code.map(std::string::ToString::to_string),
         server_fingerprint: remote.server_fingerprint.clone(),
         client_fingerprint: Some(client_fingerprint.to_string()),
         command,
         reason,
+        requested_scopes: Some(requested_scopes),
+        session_ttl_seconds: Some(remote.session_ttl_seconds),
         encrypted_vault_hex,
-    }
+    })
 }
 
 fn remote_payload_from_state(inner: &DesktopStateInner) -> Result<Vec<u8>> {
@@ -1382,14 +1411,23 @@ async fn push_vault_to_remote_if_possible(
     if remote.requires_repairing && command != Some(REMOTE_COMMAND_REVOKE) {
         bail!("remote requires re-pairing before sync commands");
     }
-    match remote.permissions.as_str() {
-        "read_only" if command != Some(REMOTE_COMMAND_REVOKE) => {
-            bail!("remote policy is read_only; push/erase blocked")
+    let requested_scopes = remote_requested_scopes(&remote.permissions)?;
+    if let Some(command) = command {
+        if !REMOTE_COMMAND_ALLOWED.contains(&command) {
+            bail!("unsupported remote command");
         }
-        "push_only" if command == Some(REMOTE_COMMAND_ERASE) => {
-            bail!("remote policy is push_only; erase blocked")
+        if command == REMOTE_COMMAND_ERASE
+            && !requested_scopes.contains(&REMOTE_SCOPE_ERASE.to_string())
+        {
+            bail!("remote policy forbids erase");
         }
-        _ => {}
+        if command == REMOTE_COMMAND_REVOKE
+            && !requested_scopes.contains(&REMOTE_SCOPE_REVOKE.to_string())
+        {
+            bail!("remote policy forbids revoke");
+        }
+    } else if pairing_code.is_none() && !requested_scopes.contains(&REMOTE_SCOPE_PUSH.to_string()) {
+        bail!("remote policy forbids push");
     }
     if remote.endpoint.contains('?') {
         bail!("invalid remote endpoint");
@@ -1402,7 +1440,7 @@ async fn push_vault_to_remote_if_possible(
         command,
         reason,
         remote_payload_to_hex(encrypted_vault_payload),
-    );
+    )?;
     let response = send_remote_push(&remote.endpoint, &request, client_private_key)
         .await
         .with_context(|| format!("remote sync failed: {}", remote.endpoint))?;
@@ -1715,6 +1753,17 @@ async fn pair_and_add_remote(
     let server_fingerprint = parse_remote_fingerprint(relay_fingerprint).map_err(err_to_string)?;
 
     let proof = build_noise_quic_pairing_proof(&endpoint).map_err(err_to_string)?;
+    let permissions = request
+        .permissions
+        .unwrap_or_else(|| "full".to_string())
+        .trim()
+        .to_ascii_lowercase();
+    let normalized_permissions = if permissions.is_empty() {
+        "full".to_string()
+    } else {
+        permissions
+    };
+    remote_requested_scopes(&normalized_permissions).map_err(err_to_string)?;
     let now = Utc::now();
     let (remote, fingerprint, client_private_key, payload) = {
         let mut inner = state.lock_inner().map_err(err_to_string)?;
@@ -1746,7 +1795,7 @@ async fn pair_and_add_remote(
             id,
             name: request.name,
             endpoint: endpoint.clone(),
-            permissions: request.permissions.unwrap_or_else(|| "full".to_string()),
+            permissions: normalized_permissions,
             session_ttl_seconds: request.session_ttl_seconds.unwrap_or(86_400),
             revoked_at: None,
             requires_repairing: false,
@@ -3236,6 +3285,66 @@ message: "Optional update"
         assert!(validate_remote_command(None).is_ok());
         assert!(validate_remote_command(Some(REMOTE_COMMAND_ERASE)).is_ok());
         assert!(validate_remote_command(Some("rm -rf /")).is_err());
+    }
+
+    #[test]
+    fn remote_permission_mapping_is_canonical() {
+        assert_eq!(
+            remote_requested_scopes("full").expect("full permission should map"),
+            vec![
+                REMOTE_SCOPE_PUSH.to_string(),
+                REMOTE_SCOPE_ERASE.to_string(),
+                REMOTE_SCOPE_REVOKE.to_string(),
+            ]
+        );
+        assert_eq!(
+            remote_requested_scopes("push_only").expect("push_only permission should map"),
+            vec![
+                REMOTE_SCOPE_PUSH.to_string(),
+                REMOTE_SCOPE_REVOKE.to_string()
+            ]
+        );
+        assert_eq!(
+            remote_requested_scopes("read_only").expect("read_only permission should map"),
+            vec![REMOTE_SCOPE_REVOKE.to_string()]
+        );
+        assert!(remote_requested_scopes("read-only").is_err());
+    }
+
+    #[test]
+    fn remote_permission_mapping_is_case_insensitive() {
+        assert_eq!(
+            remote_requested_scopes("FuLl ").expect("case should normalize"),
+            vec![
+                REMOTE_SCOPE_PUSH.to_string(),
+                REMOTE_SCOPE_ERASE.to_string(),
+                REMOTE_SCOPE_REVOKE.to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn ensure_settings_defaults_rejects_invalid_remote_permission() {
+        let settings = DesktopSettings {
+            remotes: vec![RemoteServer {
+                id: "remote-1".to_string(),
+                name: "remote".to_string(),
+                endpoint: "127.0.0.1:51821".to_string(),
+                permissions: "unsupported".to_string(),
+                session_ttl_seconds: 86_400,
+                revoked_at: None,
+                requires_repairing: false,
+                pairing_code: None,
+                relay_fingerprint: None,
+                server_fingerprint: None,
+                session_token: None,
+                key_count: 0,
+                last_sync: None,
+            }],
+            ..DesktopSettings::default()
+        };
+
+        assert!(ensure_settings_defaults(settings).is_err());
     }
 
     #[tokio::test]
