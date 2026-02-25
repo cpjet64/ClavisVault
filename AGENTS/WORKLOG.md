@@ -1,24 +1,33 @@
 # Now
-- Keep improving in-progress status: raise clavisvault-core library coverage to satisfy
-  `cargo llvm-cov --package clavisvault-core --lib --fail-under-lines 95`.
-- Continue coverage-focused work in `audit_log`, `encryption`, `openclaw`, `policy`, and
-  `project_linker` from current `--show-missing-lines` evidence.
-- Preserve the `collect_events` debounce-window correctness fix and keep `ci-fast` green
-  while coverage work continues.
+- Implementing Phase-0 GUI verification path for the desktop app (unlock → add key → lock) with
+  Playwright + Tauri launch and deterministic test IDs.
+- Verifying the first canonical Phase-0 in-app flow pass and updating canonical evidence files
+  (`EXECUTION-PLAN.md`, `MASTER-CHECKLIST.md`).
 
 # Next
-- Add the next test-only coverage slice in the highest-gap files.
-- Re-run:
-  - `cargo test -p clavisvault-core --lib`
-  - `cargo llvm-cov test --package clavisvault-core --lib --fail-under-lines 95`
-  - `cargo llvm-cov test --package clavisvault-core --lib --show-missing-lines`
-- Repeat until the 95% gate passes.
+- Run optional persistence smoke:
+  - `CLAVIS_E2E_PERSISTENCE_SMOKE=1 npm --prefix crates/desktop run test:e2e`
+- Expand optional GUI assertions for copy/delete/rotate paths after flow stability is confirmed.
+- Capture flaky-window cleanup evidence after repeated GUI runs.
 
 # Later
-- Review any remaining misses for low-risk cleanup.
-- Re-run full target checks from repository gate scripts if present and clean.
+- Expand E2E coverage with optional input-validation and copy/delete/rotate action tests.
+- Capture optional CI hardening for other platforms after Windows pass (`.github/workflows/ci.yml`).
 
 # Done
+- Phase-0 unlock/add/key-count flow is now addressable via UI test IDs:
+  - `unlock-form`, `master-password-input`, `unlock-button`, `lock-button`, `lock-status-indicator`,
+    `last-action-message`, `search-input`, `key-name-input`, `key-description-input`,
+    `key-tags-input`, `key-secret-input`, `save-key-button`, `key-row`, `vault-key-count`,
+    `copy-key-button`, `delete-key-button`, `rotate-key-button`.
+- Desktop test automation scaffolding added:
+  - `crates/desktop/playwright.config.ts`
+  - `crates/desktop/tests/e2e/global.setup.ts`
+  - `crates/desktop/tests/e2e/global.teardown.ts`
+  - `crates/desktop/tests/e2e/desktop-flow.spec.ts` with unlock/add/lock + persistence smoke.
+- Added GUI data-root overrides for E2E in `crates/desktop/src-tauri/src/lib.rs` via
+  `CLAVIS_E2E_HOME`/`CLAVIS_E2E_TEMP_DIR`.
+- Optional Windows GUI E2E CI job added to `.github/workflows/ci.yml` (`desktop-gui-e2e`).
 - Classified repository as IN-PROGRESS from fresh gates.
 - Ran `just ci-fast`; first failed at `cargo fmt --check`.
 - Ran `cargo fmt` and re-ran `just ci-fast`; then failed at clippy with two test lints.
@@ -52,12 +61,26 @@
 - Added `AGENTS/WORKLOG.md` planning update in this pass and documented the remaining
   `openclaw`, `policy`, `project_linker`, `audit_log`, and `encryption` miss profile.
 - Re-ran full coverage and confirmed misses remain at 92.70% line coverage.
+- Executed and passed desktop GUI E2E gate commands for phase-0:
+  - `npm --prefix crates/desktop run build`
+  - `npm --prefix crates/desktop run test:e2e:install`
+  - `npm --prefix crates/desktop run test:e2e` (1 passed, 1 skipped persistence smoke)
+- Ran full `just ci-fast` after GUI changes (pass).
 
 # Decisions Needed
 - None currently.
 
 # Evidence
+- Phase-0 GUI E2E harness and specs are implemented in `crates/desktop/tests/e2e/*.ts` and
+  wired through `playwright.config.ts`.
+- E2E environment isolation added in `global.setup.ts` for HOME/profile/app data/temp paths.
 - `just ci-fast` now passes clean after debounce + clippy fixes.
+- Recorded GUI flow command evidence on 2026-02-25:
+  - `npm --prefix crates/desktop run build` (pass)
+  - `npm --prefix crates/desktop run test:e2e:install` (pass)
+  - `npm --prefix crates/desktop run test:e2e` (pass, 1 passed, 1 skipped)
+  - `just ci-fast` (pass, 377 tests)
+- Updated `EXECUTION-PLAN.md`/`MASTER-CHECKLIST.md` with unlock/add/lock E2E completion.
 - `cargo llvm-cov test --package clavisvault-core --lib --fail-under-lines 95`
   currently fails at 92.70% line coverage.
 - `cargo llvm-cov test --package clavisvault-core --lib --show-missing-lines` currently
@@ -65,6 +88,9 @@
   `project_linker.rs`.
 
 # Assumptions
-- Existing unit-test style is acceptable for adding branch coverage.
-- No functional bug fix required; objective is coverage uplift to satisfy threshold.
-- Remaining misses are branch coverage in non-error happy-path-heavy code paths and are safe to address via targeted tests.
+- Tauri runtime path resolution can safely use `CLAVIS_E2E_HOME`/`CLAVIS_E2E_TEMP_DIR` during tests
+  without impacting default production behavior.
+- Playwright browser automation against the app at `http://127.0.0.1:1420` is sufficient for this
+  phase; native webview-only interactions are deferred until first milestone closure.
+- `just ci-fast` remains the repo-quality baseline; GUI E2E is a targeted extension on Windows.
+- Persistence smoke remains intentionally optional behind `CLAVIS_E2E_PERSISTENCE_SMOKE=1`.

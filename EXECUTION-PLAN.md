@@ -33,8 +33,17 @@ See MASTER-CHECKLIST.md for the detailed items under each milestone.
 - Repository state classified as `IN-PROGRESS`.
 - Step 1 passed: `just ci-fast` now completes successfully (`fmt`, `machete`, `clippy`, and `nextest`) after adjusting server TTL clamp test jitter tolerance.
 - Step 2 verified for runtime path: desktop binary builds and starts (`clavisvault-desktop-tauri`), and `tests::unlock_and_upsert_flow_round_trips` in `crates/desktop/src-tauri/src/lib.rs` verifies unlock + upsert + persist + re-open persistence of secret in runtime APIs.
-- Full unlock-in-app UI flow remains unverified in this environment and still requires GUI automation/harness in a GUI-capable environment.
-- Step 3 evidence exists via CLI test `add_and_list_cycle_works_with_core_vault` (`crates/cli/src/main.rs`) covering unlock + add-key flow.
+- Full unlock-in-app flow is now verified via Playwright GUI E2E: `crates/desktop/tests/e2e/desktop-flow.spec.ts`
+  (`unlock, add key, verify list, lock`) running against a temp isolated app profile.
+  Latest run on 2026-02-25 passed on Windows:
+  - `npm --prefix crates/desktop run build`
+  - `npm --prefix crates/desktop run test:e2e:install`
+  - `npm --prefix crates/desktop run test:e2e`
+  Result: 1 passed, 1 skipped (`CLAVIS_E2E_PERSISTENCE_SMOKE` path gated off), exit code 0.
+- Step 3 evidence now includes deterministic UI automation evidence plus existing runtime/API coverage:
+  - `crates/desktop/tests/e2e/desktop-flow.spec.ts`
+  - `crates/core` unlock/add runtime regression test in
+    `crates/desktop/src-tauri/src/lib.rs` (`unlock_and_upsert_flow_round_trips`)
 - Step 1 gate blocker was fixed by widening the server TTL assertion window for scheduling jitter in `requested_session_ttl_is_clamped_to_token_policy`.
 - Last status note update: all phase-0 verification steps and evidence recorded in `.AGENTS/WORKLOG.md`.
 

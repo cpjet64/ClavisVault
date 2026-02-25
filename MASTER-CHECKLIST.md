@@ -11,6 +11,8 @@
 - [ ] Basic CRUD (add/edit/delete/copy key) works in UI
 - [x] All quality gates pass (`just ci-fast`, clippy, tests)
 - [x] End-to-end test exists that unlocks and adds a key
+- [x] GUI desktop E2E run validates unlock/add/lock flow (`crates/desktop/tests/e2e/desktop-flow.spec.ts`)
+- [ ] GUI desktop E2E flow includes persistence smoke check under reload (`crates/desktop/tests/e2e/desktop-flow.spec.ts`)
 
 ## Milestone 2 – Full Security Invariants + Agents Updater
 - [ ] Zero plaintext on disk (all file ops use SafeFileOps)
