@@ -182,6 +182,33 @@ fn remote_client_private_key_from_hex(hex_value: &str) -> Option<[u8; 32]> {
     Some(private_key)
 }
 
+fn resolve_e2e_app_root() -> Option<PathBuf> {
+    if let Ok(explicit_root) = std::env::var("CLAVIS_E2E_HOME") {
+        let trimmed = explicit_root.trim();
+        if !trimmed.is_empty() {
+            return Some(PathBuf::from(trimmed));
+        }
+    }
+
+    std::env::var("CLAVIS_E2E_TEMP_DIR")
+        .ok()
+        .map(|temp_root| PathBuf::from(temp_root).join("clavisvault-desktop"))
+        .filter(|path| !path.as_os_str().is_empty())
+}
+
+fn resolve_app_dirs() -> (PathBuf, PathBuf) {
+    if let Some(base_dir) = resolve_e2e_app_root() {
+        let data_dir = base_dir.join("data");
+        let config_dir = base_dir.join("config");
+        return (data_dir, config_dir);
+    }
+
+    (
+        current_platform_data_dir().join(APP_DIR_NAME),
+        current_platform_config_dir().join(APP_DIR_NAME),
+    )
+}
+
 #[cfg(test)]
 fn test_keyring_store() -> &'static Mutex<HashMap<String, String>> {
     TEST_KEYRING.get_or_init(|| Mutex::new(HashMap::new()))
@@ -666,8 +693,7 @@ struct DesktopState(Arc<Mutex<DesktopStateInner>>);
 
 impl DesktopState {
     fn init() -> Result<Self> {
-        let data_dir = current_platform_data_dir().join(APP_DIR_NAME);
-        let config_dir = current_platform_config_dir().join(APP_DIR_NAME);
+        let (data_dir, config_dir) = resolve_app_dirs();
         fs::create_dir_all(&data_dir)?;
         fs::create_dir_all(&config_dir)?;
 

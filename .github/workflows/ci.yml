@@ -177,3 +177,33 @@ jobs:
           CLAVIS_REQUIRE_TAURI_TESTS: "1"
           CLAVIS_EXTREME_FUZZ_SECONDS: "60"
         run: bash scripts/run-extreme-tests.sh
+
+  desktop-gui-e2e:
+    name: GUI E2E (desktop)
+    runs-on: windows-2022
+    needs: [check]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.93.1
+          components: clippy, rustfmt
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: crates/desktop/package-lock.json
+
+      - name: Install desktop dependencies
+        run: npm --prefix crates/desktop ci
+
+      - name: Install browser dependencies
+        run: npm --prefix crates/desktop run test:e2e:install
+
+      - name: Run desktop GUI E2E
+        run: npm --prefix crates/desktop run test:e2e

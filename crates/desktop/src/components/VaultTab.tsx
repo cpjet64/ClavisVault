@@ -72,6 +72,7 @@ export function VaultTab({
           <input
             value={search}
             onChange={(event) => onSearchChange(event.target.value)}
+            data-testid="search-input"
             placeholder="Search keys..."
             className="w-full rounded-lg border border-accent/20 bg-surface/70 px-3 py-2 text-sm text-text outline-none focus:border-accent"
           />
@@ -100,18 +101,21 @@ export function VaultTab({
             required
             value={name}
             onChange={(event) => setName(event.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, ""))}
+            data-testid="key-name-input"
             placeholder="KEY_NAME"
             className="rounded-lg border border-accent/20 bg-surface/70 px-3 py-2 text-sm text-text outline-none focus:border-accent"
           />
           <input
             value={description}
             onChange={(event) => setDescription(event.target.value)}
+            data-testid="key-description-input"
             placeholder="Description"
             className="rounded-lg border border-accent/20 bg-surface/70 px-3 py-2 text-sm text-text outline-none focus:border-accent"
           />
           <input
             value={tags}
             onChange={(event) => setTags(event.target.value)}
+            data-testid="key-tags-input"
             placeholder="tag1,tag2"
             className="rounded-lg border border-accent/20 bg-surface/70 px-3 py-2 text-sm text-text outline-none focus:border-accent"
           />
@@ -120,11 +124,13 @@ export function VaultTab({
             type="password"
             autoComplete="off"
             onChange={(event) => setSecret(event.target.value)}
+            data-testid="key-secret-input"
             placeholder="Optional secret value (memory-only cache)"
             className="rounded-lg border border-accent/20 bg-surface/70 px-3 py-2 text-sm text-text outline-none focus:border-accent"
           />
           <button
             type="submit"
+            data-testid="save-key-button"
             className="inline-flex items-center justify-center gap-2 rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-slate-950 transition hover:brightness-110"
           >
             <Plus className="h-4 w-4" /> Save Key
@@ -185,7 +191,9 @@ export function VaultTab({
       <GlassCard>
         <div className="mb-3 flex items-center justify-between">
           <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-accent/70">Keys</h3>
-          <span className="text-xs text-text/65">{filteredKeys.length} visible</span>
+          <span className="text-xs text-text/65" data-testid="vault-key-count">
+            {filteredKeys.length} visible
+          </span>
         </div>
         {loading ? <div className="text-sm text-text/70">Loading keys...</div> : null}
         <div className="overflow-x-auto">
@@ -195,13 +203,19 @@ export function VaultTab({
                 <th>Name</th>
                 <th>Description</th>
                 <th>Tags</th>
-                <th>Updated</th>
-                <th>Actions</th>
-              </tr>
+              <th>Updated</th>
+              <th>Actions</th>
+            </tr>
             </thead>
             <tbody>
               {filteredKeys.map((key) => (
-                <tr key={key.name} className="rounded-lg bg-surface/45 transition hover:bg-accent/5">
+                <tr
+                  key={key.name}
+                  data-testid="key-row"
+                  data-key={key.name}
+                  data-row-testid={`key-row-${key.name}`}
+                  className="rounded-lg bg-surface/45 transition hover:bg-accent/5"
+                >
                   <td className="rounded-l-lg px-2 py-2 font-mono text-xs text-accent/90">{key.name}</td>
                   <td className="px-2 py-2 text-text/85">{key.description}</td>
                   <td className="px-2 py-2 text-text/75">{key.tags.join(", ")}</td>
@@ -211,6 +225,7 @@ export function VaultTab({
                       <button
                         type="button"
                         onClick={() => onCopy(key.name)}
+                        data-testid="copy-key-button"
                         className="rounded-md border border-accent/30 px-2 py-1 text-xs text-accent/90 transition hover:bg-accent/10"
                       >
                         Copy
@@ -218,6 +233,7 @@ export function VaultTab({
                       <button
                         type="button"
                         onClick={() => onDelete(key.name)}
+                        data-testid="delete-key-button"
                         className="inline-flex items-center gap-1 rounded-md border border-rose-300/40 px-2 py-1 text-xs text-rose-100"
                       >
                         <Trash2 className="h-3 w-3" /> Delete
@@ -225,6 +241,7 @@ export function VaultTab({
                       <button
                         type="button"
                         onClick={() => onRotate?.(key.name)}
+                        data-testid="rotate-key-button"
                         className="rounded-md border border-amber-300/40 px-2 py-1 text-xs text-amber-100"
                       >
                         Rotate

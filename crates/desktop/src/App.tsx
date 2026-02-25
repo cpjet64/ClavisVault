@@ -317,23 +317,31 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => void lockVault()}
+                  data-testid="lock-button"
                   className="inline-flex items-center gap-2 rounded-lg border border-accent/45 bg-accent/10 px-3 py-2 text-xs text-accent"
                 >
                   <Lock className="h-4 w-4" /> Lock Vault
                 </button>
               ) : (
-                <span className="inline-flex items-center gap-2 rounded-lg border border-accent/20 bg-surface/60 px-3 py-2 text-xs text-accent/80">
+                <span
+                  className="inline-flex items-center gap-2 rounded-lg border border-accent/20 bg-surface/60 px-3 py-2 text-xs text-accent/80"
+                  data-testid="lock-status-indicator"
+                >
                   <Lock className="h-4 w-4" /> Locked
                 </span>
               )}
             </div>
           </div>
 
-          {lastActionMessage ? <p className="mt-3 text-xs text-text/65">{lastActionMessage}</p> : null}
+          {lastActionMessage ? (
+            <p className="mt-3 text-xs text-text/65" data-testid="last-action-message">
+              {lastActionMessage}
+            </p>
+          ) : null}
         </GlassCard>
 
         {!unlocked ? (
-          <GlassCard className="mx-auto max-w-md">
+          <GlassCard className="mx-auto max-w-md" data-testid="unlock-form">
             <h2 className="mb-3 text-lg font-semibold text-text">Unlock Vault</h2>
             <form
               className="space-y-3"
@@ -358,11 +366,13 @@ export default function App() {
                 type="password"
                 value={unlockPassword}
                 onChange={(event) => setUnlockPassword(event.target.value)}
+                data-testid="master-password-input"
                 placeholder="Master password"
                 className="w-full rounded-lg border border-accent/25 bg-surface/70 px-3 py-2 text-sm text-text outline-none focus:border-accent"
               />
               <button
                 type="submit"
+                data-testid="unlock-button"
                 className="inline-flex items-center gap-2 rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-slate-950 transition hover:brightness-110"
               >
                 <Unlock className="h-4 w-4" /> Unlock
