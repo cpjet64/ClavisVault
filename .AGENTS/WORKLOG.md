@@ -10,6 +10,7 @@
 - `02/25/2026`: Executed `cargo build --package clavisvault-desktop-tauri` successfully; desktop binary compiles.
 - `02/25/2026`: Started `clavisvault-desktop-tauri.exe --help` and confirmed process enters run state (terminated after timeout), indicating successful native launcher start in this environment.
 - `02/25/2026`: Added desktop runtime test `unlock_and_upsert_flow_round_trips` in `crates/desktop/src-tauri/src/lib.rs` and verified it passes in CI-style command mode (`cargo test -p clavisvault-desktop-tauri unlock_and_upsert_flow_round_trips`).
+- `02/25/2026`: Marked master-password unlock/lock as verified at runtime level in `MASTER-CHECKLIST.md` based on `runtime_secrets_are_wiped_when_locked` and `unlock_and_upsert_flow_round_trips`.
 
 ## Next
 - Re-run `cargo llvm-cov nextest --package clavisvault-core --lib --no-fail-fast` (continuation pass).

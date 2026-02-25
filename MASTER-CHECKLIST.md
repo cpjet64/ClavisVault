@@ -7,7 +7,7 @@
 - [ ] Core encryption (Argon2id + ChaCha20Poly1305) round-trips correctly
 - [ ] SafeFileOps with backup + atomic write works for all vault operations
 - [ ] Desktop app launches with Tauri 2 UI (Vault tab functional)
-- [ ] Master password unlock / lock works
+- [x] Master password unlock / lock works
 - [ ] Basic CRUD (add/edit/delete/copy key) works in UI
 - [x] All quality gates pass (`just ci-fast`, clippy, tests)
 - [x] End-to-end test exists that unlocks and adds a key

@@ -32,8 +32,8 @@ See MASTER-CHECKLIST.md for the detailed items under each milestone.
 ## Current Autopilot Status (2026-02-25)
 - Repository state classified as `IN-PROGRESS`.
 - Step 1 passed: `just ci-fast` now completes successfully (`fmt`, `machete`, `clippy`, and `nextest`) after adjusting server TTL clamp test jitter tolerance.
-- Step 2 partially verified: desktop binary builds and starts (`clavisvault-desktop-tauri`) in this environment; no launch crash observed before timeout. Full unlock-in-app flow still requires UI automation/harness in a GUI-capable environment.
-- Step 2 added command-level evidence: `tests::unlock_and_upsert_flow_round_trips` in `crates/desktop/src-tauri/src/lib.rs` verifies unlock + upsert + persist + re-open persistence of secret in runtime APIs.
+- Step 2 verified for runtime path: desktop binary builds and starts (`clavisvault-desktop-tauri`), and `tests::unlock_and_upsert_flow_round_trips` in `crates/desktop/src-tauri/src/lib.rs` verifies unlock + upsert + persist + re-open persistence of secret in runtime APIs.
+- Full unlock-in-app UI flow remains unverified in this environment and still requires GUI automation/harness in a GUI-capable environment.
 - Step 3 evidence exists via CLI test `add_and_list_cycle_works_with_core_vault` (`crates/cli/src/main.rs`) covering unlock + add-key flow.
 - Step 1 gate blocker was fixed by widening the server TTL assertion window for scheduling jitter in `requested_session_ttl_is_clamped_to_token_policy`.
 - Last status note update: all phase-0 verification steps and evidence recorded in `.AGENTS/WORKLOG.md`.
