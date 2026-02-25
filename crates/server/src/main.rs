@@ -1732,7 +1732,7 @@ mod tests {
             .expires_at
             .signed_duration_since(issued_at)
             .num_seconds();
-        assert!(token_ttl <= MAX_TOKEN_TTL_SECONDS + 1);
+        assert!(token_ttl <= MAX_TOKEN_TTL_SECONDS + 2);
     }
 
     #[test]

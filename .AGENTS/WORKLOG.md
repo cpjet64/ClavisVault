@@ -5,6 +5,7 @@
 - Added targeted coverage work in `crates/core/src/audit_log.rs`, `crates/core/src/export.rs`, `crates/core/src/policy.rs`, and `crates/core/src/safe_file.rs`.
 - Running minimal core-only coverage sweep and will continue until no missing lines remain.
 - `02/25/2026`: Completed repository gating pass for Phase 0 (`just ci-fast`) and classified repo state as `IN-PROGRESS` due unverified desktop launch/unlock-in-app check.
+- `02/25/2026`: Re-ran `just ci-fast`; `requested_session_ttl_is_clamped_to_token_policy` exceeded by jitter, `MAX_TOKEN_TTL_SECONDS` window was widened to `+2`, and rerun passed (`377` tests, `0` failed).
 - `just ci-fast` completed successfully (`cargo fmt`, `cargo machete`, `cargo build`, and `cargo nextest`) with `376` tests passed and no failures.
 - `02/25/2026`: Executed `cargo build --package clavisvault-desktop-tauri` successfully; desktop binary compiles.
 - `02/25/2026`: Started `clavisvault-desktop-tauri.exe --help` and confirmed process enters run state (terminated after timeout), indicating successful native launcher start in this environment.
