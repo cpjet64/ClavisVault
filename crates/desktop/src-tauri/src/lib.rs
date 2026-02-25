@@ -3878,4 +3878,86 @@ message: "Optional update"
     fn remote_client_private_key_from_hex_rejects_non_hex() {
         assert_eq!(remote_client_private_key_from_hex(&"zz".repeat(32)), None);
     }
+
+    #[test]
+    fn unlock_and_upsert_flow_round_trips() {
+        let mut runtime = VaultRuntime::new(
+            std::env::temp_dir().join("clavisvault-tauri-unlock-upsert.cv"),
+            10,
+        );
+        let password = "desktop-runtime-password-123";
+        let initial = VaultData::new([7_u8; 16]);
+
+        let initial_key = derive_master_key(password, &initial.salt)
+            .expect("master key derivation should succeed");
+        persist_encrypted_vault(&mut runtime, &initial, &initial_key)
+            .expect("initial vault should persist");
+
+        let mut runtime = VaultRuntime::new(runtime.encrypted_path.clone(), 10);
+        let encrypted = runtime
+            .encrypted
+            .as_ref()
+            .expect("fixture encrypted vault should be on disk")
+            .clone();
+        let unlocked =
+            unlock_vault(&encrypted, &initial_key).expect("initial unlock should succeed");
+        runtime.decrypted = Some(unlocked);
+        runtime.master_key = Some(initial_key);
+        runtime.secret_cache.clear();
+        runtime
+            .secret_cache
+            .insert("STARTUP_KEY".to_string(), "startup-secret".to_string());
+
+        runtime
+            .decrypted
+            .as_mut()
+            .expect("vault should be unlocked")
+            .keys
+            .insert(
+                "CI_TEST_KEY".to_string(),
+                KeyEntry {
+                    name: "CI_TEST_KEY".to_string(),
+                    description: "desktop runtime smoke test".to_string(),
+                    secret: Some("ci-secret-value".to_string()),
+                    tags: vec!["desktop".to_string(), "smoke".to_string()],
+                    last_updated: Utc::now(),
+                    created_at: Utc::now(),
+                    expires_at: None,
+                    rotation_period_days: Some(30),
+                    warn_before_days: Some(7),
+                    last_rotated_at: None,
+                    owner: Some("autopilot".to_string()),
+                },
+            );
+        runtime
+            .secret_cache
+            .insert("CI_TEST_KEY".to_string(), "ci-secret-value".to_string());
+        runtime.audit.record(
+            AuditOperation::FileUpdate,
+            Some("CI_TEST_KEY".to_string()),
+            "smoke test",
+        );
+        persist_unlocked(&mut runtime).expect("vault with upserted key should persist");
+
+        lock_runtime_vault(&mut runtime).expect("vault should lock after runtime persistence");
+        assert!(runtime.decrypted.is_none());
+        assert!(runtime.master_key.is_none());
+        assert!(runtime.secret_cache.is_empty());
+
+        let reopened = VaultRuntime::new(runtime.encrypted_path.clone(), 10);
+        let reopened_encrypted = reopened
+            .encrypted
+            .as_ref()
+            .expect("vault should be restored from disk");
+        let reopened_key = derive_master_key(password, &reopened_encrypted.header.salt)
+            .expect("reopened master key should derive");
+        let reopened_vault =
+            unlock_vault(reopened_encrypted, &reopened_key).expect("reopened vault should unlock");
+        let stored_secret = reopened_vault
+            .keys
+            .get("CI_TEST_KEY")
+            .and_then(|entry| entry.secret.as_deref())
+            .expect("upserted key should be persisted");
+        assert_eq!(stored_secret, "ci-secret-value");
+    }
 }

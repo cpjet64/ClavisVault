@@ -8,10 +8,11 @@
 - `just ci-fast` completed successfully (`cargo fmt`, `cargo machete`, `cargo build`, and `cargo nextest`) with `376` tests passed and no failures.
 - `02/25/2026`: Executed `cargo build --package clavisvault-desktop-tauri` successfully; desktop binary compiles.
 - `02/25/2026`: Started `clavisvault-desktop-tauri.exe --help` and confirmed process enters run state (terminated after timeout), indicating successful native launcher start in this environment.
+- `02/25/2026`: Added desktop runtime test `unlock_and_upsert_flow_round_trips` in `crates/desktop/src-tauri/src/lib.rs` and verified it passes in CI-style command mode (`cargo test -p clavisvault-desktop-tauri unlock_and_upsert_flow_round_trips`).
 
 ## Next
-- Re-run `cargo llvm-cov nextest --package clavisvault-core --lib --no-fail-fast`.
-- Re-run `cargo llvm-cov report --package clavisvault-core --text --show-missing-lines`.
+- Re-run `cargo llvm-cov nextest --package clavisvault-core --lib --no-fail-fast` (continuation pass).
+- Re-run `cargo llvm-cov report --package clavisvault-core --text --show-missing-lines` and close remaining miss set.
 - Patch only remaining misses with narrow tests or minimal code simplifications.
 - Commit each coverage-blocking change as an atomic commit once gates pass.
 - Verify Phase 0 Step 2 directly through a desktop automation harness (app launch + unlock). Runtime launch-only validation is incomplete without unlock automation.
@@ -39,6 +40,7 @@
 - Prior `cargo llvm-cov report --package clavisvault-core --text --show-missing-lines` baseline (98.57% line coverage).
 - `just ci-fast` output on `c:\\Dev\\repos\\active\\ClavisVault` (376 tests passed, no failures) and successful hygiene/build/check pipelines.
 - `crates/cli/src/main.rs::add_and_list_cycle_works_with_core_vault` confirms add-key flow after vault creation.
+- `crates/desktop/src-tauri/src/lib.rs::tests::unlock_and_upsert_flow_round_trips` validates unlock + upsert + persist + re-open secret round-trip at runtime API level.
 
 ## Assumptions
 - Coverage-only changes do not require spec or docs changes unless user-visible behavior changes.
