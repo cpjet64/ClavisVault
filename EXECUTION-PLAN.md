@@ -32,7 +32,7 @@ See MASTER-CHECKLIST.md for the detailed items under each milestone.
 ## Current Autopilot Status (2026-02-25)
 - Repository state classified as `IN-PROGRESS`.
 - Step 1 passed: `just ci-fast` completed successfully (fmt + machete + build + nextest).
-- Step 2 not yet verified with a desktop launch path in this environment.
+- Step 2 partially verified: desktop binary builds and starts (`clavisvault-desktop-tauri`) in this environment; no launch crash observed before timeout. Full unlock-in-app flow still requires UI automation/harness in a GUI-capable environment.
 - Step 3 evidence exists via CLI test `add_and_list_cycle_works_with_core_vault` (`crates/cli/src/main.rs`) covering unlock + add-key flow.
 - Last status note update: all phase-0 verification steps and evidence recorded in `.AGENTS/WORKLOG.md`.
 

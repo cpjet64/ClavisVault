@@ -6,13 +6,15 @@
 - Running minimal core-only coverage sweep and will continue until no missing lines remain.
 - `02/25/2026`: Completed repository gating pass for Phase 0 (`just ci-fast`) and classified repo state as `IN-PROGRESS` due unverified desktop launch/unlock-in-app check.
 - `just ci-fast` completed successfully (`cargo fmt`, `cargo machete`, `cargo build`, and `cargo nextest`) with `376` tests passed and no failures.
+- `02/25/2026`: Executed `cargo build --package clavisvault-desktop-tauri` successfully; desktop binary compiles.
+- `02/25/2026`: Started `clavisvault-desktop-tauri.exe --help` and confirmed process enters run state (terminated after timeout), indicating successful native launcher start in this environment.
 
 ## Next
 - Re-run `cargo llvm-cov nextest --package clavisvault-core --lib --no-fail-fast`.
 - Re-run `cargo llvm-cov report --package clavisvault-core --text --show-missing-lines`.
 - Patch only remaining misses with narrow tests or minimal code simplifications.
 - Commit each coverage-blocking change as an atomic commit once gates pass.
-- Verify Phase 0 Step 2 directly in desktop runtime path (app launch + unlock), then mark that checklist item.
+- Verify Phase 0 Step 2 directly through a desktop automation harness (app launch + unlock). Runtime launch-only validation is incomplete without unlock automation.
 - Confirm whether existing CLI cycle test satisfies Phase 0 Step 3 or add dedicated desktop e2e test for unlock + add-key.
 
 ## Later
@@ -25,6 +27,7 @@
 - Added coverage-focused tests and removed brittle assert-only panic branches in `audit_log` integrity tests.
 - `just ci-fast` completed cleanly (fmt, machete, build, nextest 376 passed).
 - Verified CLI has `add_and_list_cycle_works_with_core_vault` test covering unlock + add-key flow at command boundary.
+- Confirmed desktop startup path compiles and binary launch enters runtime loop using existing process-level check.
 
 ## Decisions Needed
 - None at this time.
