@@ -12,7 +12,7 @@
 - [x] Add detailed inline comments for any truly uncoverable code.
 - [x] Update `docs/coverage-report.md` with before/after metrics and evidence.
 - [x] Run `just ci-fast` and `just ci-deep` before integration.
-- [ ] Commit each verified coverage change set locally (no push).
+- [x] Commit each verified coverage change set locally (no push).
 
 ## Review (in progress)
 
@@ -39,7 +39,7 @@
 - Iteration result (`cargo llvm-cov --package clavisvault-core --lib --summary-only`):
   - Core TOTAL line coverage: `99.19%`
   - `policy.rs` line misses down to 2; `project_linker.rs` line misses down to 4; both target lines now covered.
-- Required integration gates (pre-commit) from prior pass:
+  - Required integration gates (pre-commit) from prior pass:
   - `just ci-fast`: PASSED
   - `just ci-deep`: PASSED
 - Local commit completed in prior pass:
@@ -59,3 +59,9 @@
     - `audit_log.rs` residuals are assertion-block closing-brace artifacts.
   - Uncoverable documentation comments were added in `audit_log.rs` on the three residual
     assertion blocks to record verification rationale and runtime guarantees.
+  - Final checklist verification pass (2026-02-26):
+    - `MASTER-CHECKLIST.md`: no unchecked items remain.
+    - `execution-plan.md`: no unchecked items remain; milestones fully completed.
+  - Required pre-integration gates rerun on 2026-02-26:
+    - `just ci-fast`: PASSED.
+    - `just ci-deep`: PASSED.
