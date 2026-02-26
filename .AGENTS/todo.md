@@ -1,26 +1,20 @@
 # TODO / Plan
 
-## Task: Regenerate canonical project documentation set
+## Task: Upgrade dependencies/tooling (dependency-upgrader workflow)
 
-- [x] Read governance files (`AGENTS.md`) and available spec context (`legacy/docs/SPEC.md` after docs reset).
-- [x] Rebuild planning artifacts for this pass (`.AGENTS/todo.md` + `.AGENTS/plans` entry).
-- [x] Synthesize architecture and behavior details from all workspace crates (`core`, `desktop`, `server`, `relay`, `cli`) plus CI/release scripts.
-- [x] Generate fresh docs set in `docs/`:
-  - `README.md`
-  - `index.md`
-  - `SPEC.md`
-  - `ARCHITECTURE.md`
-  - `API.md`
-  - `TOOLING.md`
-  - `alerts.md`
-- [x] Restore root `README.md` as a docs pointer.
-- [x] Update `docs/PROGRESS.md` with completed generation log.
-- [x] Run `just ci-fast`.
-- [x] Run `just ci-deep`.
-- [ ] Commit verified documentation change set locally (no push).
+- [x] Load dependency-upgrader skill references and supporting scripts.
+- [x] Re-bootstrap Windows native build environment (`ensure-vcvars.ps1`).
+- [x] Record baseline inventory and risk plan in `docs/dependency-upgrade-report.md`.
+- [x] Plan and execute conservative upgrade waves (security-first, then patch/minor).
+- [x] Validate each wave with required quality/security gates.
+- [x] Commit each verified wave locally (no push).
+- [x] Finalize report with outcomes, residual risk, and rollback notes.
 
 ## Review
 
-- `just ci-fast`: PASSED.
-- `just ci-deep`: PASSED.
-- Quality gates, coverage, security policy checks, and docs build completed successfully in this pass.
+- Conservative dependency wave completed without Rust lockfile churn.
+- Desktop Node lockfile updated with compatible package refresh (`crates/desktop/package-lock.json`).
+- Validation passed:
+  - `just ci-fast`
+  - `just ci-deep`
+- Security gates remained warning-only where previously allowlisted (`cargo audit`), and `npm audit --omit=dev` reported `0 vulnerabilities`.
