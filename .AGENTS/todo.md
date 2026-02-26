@@ -7,9 +7,9 @@
 - [x] Implement low-risk optimization in `crates/core/src/openclaw.rs`.
 - [x] Run targeted tests for affected module (`openclaw::tests::*`).
 - [x] Run integration quality gates (`just ci-fast`, `just ci-deep`).
-- [ ] Commit verified change set locally (no push).
+- [x] Commit verified change set locally (no push).
 
-## Review (in progress)
+## Review
 
 - Current checklist state: no remaining unchecked items in `MASTER-CHECKLIST.md` or `execution-plan.md`.
 - Optimization applied to `strip_line_comments`: replaced pre-collected `Vec<char>` scan with streaming `chars().peekable()` scan and preallocated output capacity.
