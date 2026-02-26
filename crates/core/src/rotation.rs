@@ -250,4 +250,107 @@ mod tests {
         let err = rotate_key(&mut vault, "MISSING", None, now).unwrap_err();
         assert!(err.to_string().contains("key not found"));
     }
+
+    #[test]
+    fn list_rotation_findings_uses_rotation_period_statuses() {
+        let now = Utc::now();
+        let mut vault = VaultData {
+            version: 2,
+            salt: [0; 16],
+            keys: HashMap::new(),
+        };
+
+        vault.keys.insert(
+            "ROTATE_DUE".to_string(),
+            key_entry(KeyEntryInput {
+                name: "ROTATE_DUE",
+                expires_at: None,
+                rotation_period_days: Some(30),
+                last_rotated_at: Some(now - Duration::days(29)),
+                last_updated: now,
+                warn_before_days: Some(3),
+                secret: Some("due"),
+                owner: None,
+            }),
+        );
+        vault.keys.insert(
+            "ROTATE_EXPIRED".to_string(),
+            key_entry(KeyEntryInput {
+                name: "ROTATE_EXPIRED",
+                expires_at: None,
+                rotation_period_days: Some(1),
+                last_rotated_at: Some(now - Duration::days(4)),
+                last_updated: now,
+                warn_before_days: None,
+                secret: Some("expired"),
+                owner: None,
+            }),
+        );
+        vault.keys.insert(
+            "ROTATE_HEALTHY".to_string(),
+            key_entry(KeyEntryInput {
+                name: "ROTATE_HEALTHY",
+                expires_at: None,
+                rotation_period_days: Some(30),
+                last_rotated_at: Some(now - Duration::days(1)),
+                last_updated: now,
+                warn_before_days: Some(7),
+                secret: Some("healthy"),
+                owner: None,
+            }),
+        );
+
+        let findings = list_rotation_findings(&vault, now);
+        assert_eq!(findings.len(), 3);
+        assert!(
+            findings
+                .iter()
+                .any(|finding| matches!(finding.status, RotationStatus::Expired)
+                    && finding.name == "ROTATE_EXPIRED")
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|finding| matches!(finding.status, RotationStatus::Healthy)
+                    && finding.name == "ROTATE_HEALTHY")
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|finding| matches!(finding.status, RotationStatus::Due)
+                    && finding.name == "ROTATE_DUE")
+        );
+    }
+
+    #[test]
+    fn list_rotation_findings_reports_due_when_expires_at_is_near() {
+        let now = Utc::now();
+        let mut vault = VaultData {
+            version: 2,
+            salt: [0; 16],
+            keys: HashMap::new(),
+        };
+
+        vault.keys.insert(
+            "ROTATE_EXPIRING".to_string(),
+            key_entry(KeyEntryInput {
+                name: "ROTATE_EXPIRING",
+                expires_at: Some(now + Duration::days(1)),
+                rotation_period_days: None,
+                last_rotated_at: None,
+                last_updated: now,
+                warn_before_days: Some(1),
+                secret: Some("value"),
+                owner: None,
+            }),
+        );
+
+        let findings = list_rotation_findings(&vault, now);
+        let finding = &findings[0];
+
+        assert_eq!(finding.name, "ROTATE_EXPIRING");
+        assert!(matches!(finding.status, RotationStatus::Due));
+        assert_eq!(finding.days_until_due, Some(1));
+        assert_eq!(finding.expires_at, Some(now + Duration::days(1)));
+    }
 }

@@ -129,6 +129,7 @@ mod tests {
     use chrono::Utc;
 
     use crate::{
+        encryption::{derive_master_key, lock_vault},
         export::encrypt_export,
         types::{KeyEntry, VaultData},
     };
@@ -261,5 +262,28 @@ mod tests {
 
         assert!(!export_check.ok);
         assert!(export_check.detail.contains("export verification failed"));
+    }
+
+    #[test]
+    fn recovery_drill_reports_vault_blob_decode_success() {
+        let dir = temp_dir("vault-blob-success");
+        let vault_path = dir.join("vault.cv");
+        let vault = fixture_vault();
+        let key = derive_master_key("vault-pass", &vault.salt).expect("master key should derive");
+        let encrypted = lock_vault(&vault_path, &vault, &key).expect("vault should lock");
+        fs::write(
+            &vault_path,
+            encrypted.to_bytes().expect("serialize encrypted vault"),
+        )
+        .expect("seed vault should write");
+
+        let report = run_recovery_drill(&vault_path, None, None);
+        let vault_check = report
+            .checks
+            .iter()
+            .find(|entry| entry.name == "vault_blob_decode")
+            .expect("vault blob check should exist");
+        assert!(vault_check.ok);
+        assert!(vault_check.detail.contains("ciphertext blob parsed"));
     }
 }

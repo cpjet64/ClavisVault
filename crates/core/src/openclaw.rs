@@ -95,13 +95,15 @@ fn ensure_env_comment(root: &mut Map<String, Value>) {
         *env = Value::Object(Map::new());
     }
 
-    if let Some(env_map) = env.as_object_mut() {
-        env_map
-            .entry(MANAGED_COMMENT_KEY.to_string())
-            .or_insert_with(|| Value::String(MANAGED_COMMENT.to_string()));
-    }
+    let env_map = env
+        .as_object_mut()
+        .expect("clavisVault env block must be an object");
+    env_map
+        .entry(MANAGED_COMMENT_KEY.to_string())
+        .or_insert_with(|| Value::String(MANAGED_COMMENT.to_string()));
 }
 
+#[cfg_attr(test, inline(never))]
 fn parse_json_or_jsonc(content: &str) -> Result<Value> {
     if let Ok(v) = serde_json::from_str::<Value>(content) {
         return Ok(v);
@@ -114,6 +116,7 @@ fn parse_json_or_jsonc(content: &str) -> Result<Value> {
     Ok(parsed)
 }
 
+#[cfg_attr(test, inline(never))]
 fn strip_line_comments(content: &str) -> String {
     let mut out = String::new();
     let mut in_string = false;
@@ -243,6 +246,74 @@ mod tests {
     }
 
     #[test]
+    fn updater_keeps_existing_object_env_and_adds_comment() {
+        let root = temp_dir("openclaw-env-object");
+        let file = root.join("openclaw.json");
+        fs::write(&file, "{\"env\":{\"existing\":\"value\"}}")
+            .expect("seed env object should work");
+
+        let updater = OpenClawUpdater::new(LocalSafeFileOps::default());
+        updater
+            .update_openclaw_file(&file, &json!({"ok": true}))
+            .expect("update should work with env object");
+
+        let updated: Value = serde_json::from_str(
+            &fs::read_to_string(&file).expect("read updated file should work"),
+        )
+        .expect("parse updated json should work");
+        assert_eq!(updated["env"]["existing"], "value");
+        assert_eq!(updated["env"]["_comment"], "managed by ClavisVault");
+    }
+
+    #[test]
+    fn ensure_env_comment_inserts_comment_when_missing_from_env_object() {
+        let mut root = Map::new();
+        root.insert("env".to_string(), json!({"existing":"value"}));
+
+        ensure_env_comment(&mut root);
+
+        let env = root
+            .get("env")
+            .expect("env block should still exist")
+            .as_object()
+            .expect("env block should still be object");
+        assert_eq!(env.get("_comment"), Some(&json!("managed by ClavisVault")));
+    }
+
+    #[test]
+    fn ensure_env_comment_preserves_existing_env_comment() {
+        let mut root = Map::new();
+        root.insert(
+            "env".to_string(),
+            json!({"_comment":"custom-comment","existing":"value"}),
+        );
+
+        ensure_env_comment(&mut root);
+
+        let env = root
+            .get("env")
+            .expect("env block should still exist")
+            .as_object()
+            .expect("env block should still be object");
+        assert_eq!(env.get("_comment"), Some(&json!("custom-comment")));
+    }
+
+    #[test]
+    fn ensure_env_comment_replaces_non_object_env_block() {
+        let mut root = Map::new();
+        root.insert("env".to_string(), Value::String("legacy".to_string()));
+
+        ensure_env_comment(&mut root);
+
+        let env = root
+            .get("env")
+            .expect("env block should still exist")
+            .as_object()
+            .expect("env block should be converted to object");
+        assert_eq!(env.get("_comment"), Some(&json!("managed by ClavisVault")));
+    }
+
+    #[test]
     fn updater_accepts_plain_json_without_comments() {
         let root = temp_dir("openclaw-plain-json");
         let file = root.join("openclaw.json");
@@ -315,11 +386,254 @@ mod tests {
     }
 
     #[test]
+    fn updater_preserves_existing_env_comment() {
+        let root = temp_dir("openclaw-env-keeps-comment");
+        let file = root.join("openclaw.json");
+        fs::write(
+            &file,
+            "{\"env\":{\"_comment\":\"custom-comment\",\"existing\":\"value\"}}",
+        )
+        .expect("seed env with managed comment should work");
+
+        let updater = OpenClawUpdater::new(LocalSafeFileOps::default());
+        updater
+            .update_openclaw_file(&file, &json!({"ok": true}))
+            .expect("update should keep existing comment");
+
+        let updated: Value = serde_json::from_str(
+            &fs::read_to_string(&file).expect("read updated file should work"),
+        )
+        .expect("parse updated json should work");
+        assert!(updated["env"]["_comment"].is_string());
+        assert_eq!(updated["env"]["existing"], "value");
+        assert_eq!(updated[CLAVISVAULT_KEY]["ok"], true);
+    }
+
+    #[test]
     fn strip_line_comments_respects_escaped_quotes_and_backslashes() {
         let input = "{\n  \"k\": \"escaped quote: \\\" // still string\\\\\",\n  // drop this\n  \"v\": 1\n}";
         let stripped = strip_line_comments(input);
         assert!(stripped.contains("\\\" // still string\\\\"));
         assert!(!stripped.contains("// drop this"));
+    }
+
+    #[test]
+    fn parse_json_or_jsonc_parses_json_with_line_comments() {
+        let input = "{\n  // comment header\n  \"env\": {\"_comment\": \"kept\"}\n}\n";
+
+        let parsed = parse_json_or_jsonc(input).expect("jsonc parser should normalize comments");
+        assert_eq!(parsed["env"]["_comment"], "kept");
+    }
+
+    #[test]
+    fn strip_line_comments_preserves_comment_like_text_in_json_string() {
+        let input = "{\n  \"value\": \"ignore // this in string\",\n  // actual comment\n  \"next\": true\n}";
+        let stripped = strip_line_comments(input);
+
+        assert!(stripped.contains("\"value\": \"ignore // this in string\""));
+        assert!(!stripped.contains("// actual comment"));
+    }
+
+    #[test]
+    fn parse_json_or_jsonc_reports_invalid_json_and_commentless_failure() {
+        let input = "{ \"missing\": [1, 2, }";
+
+        let err = parse_json_or_jsonc(input).expect_err("invalid json should fail");
+        assert!(
+            err.to_string()
+                .contains("failed to parse openclaw as json or jsonc")
+        );
+    }
+
+    #[test]
+    fn strip_line_comments_removes_inline_comment_after_value() {
+        let input = "{\n  \"a\": 1, \"b\": 2 // inline comment\n  , \"c\": 3\n}";
+        let stripped = strip_line_comments(input);
+
+        assert!(!stripped.contains("// inline comment"));
+        assert!(stripped.contains("\"a\": 1, \"b\": 2"));
+        assert!(stripped.contains("\"c\": 3"));
+    }
+
+    #[test]
+    fn strip_line_comments_keeps_slashes_in_non_comment_context() {
+        let input = "{\n  \"value\": \"protocol://example.com/path\" // preserve url\n}";
+        let stripped = strip_line_comments(input);
+
+        assert!(stripped.contains("protocol://example.com/path"));
+        assert!(!stripped.contains("// preserve url"));
+    }
+
+    #[test]
+    fn parse_json_or_jsonc_parses_json_with_trailing_comment_without_newline() {
+        let parsed = parse_json_or_jsonc("{\n  \"value\": 42 } // trailing comment")
+            .expect("jsonc with trailing comment should parse");
+
+        assert_eq!(parsed["value"], 42);
+    }
+
+    #[test]
+    fn strip_line_comments_removes_comment_without_trailing_newline() {
+        let input = "{\"value\": 1} // inline comment at eof";
+        let stripped = strip_line_comments(input);
+
+        assert_eq!(stripped.trim(), "{\"value\": 1}");
+        assert!(!stripped.contains("// inline comment at eof"));
+    }
+
+    #[test]
+    fn parse_json_or_jsonc_parses_plain_json_without_comment_path() {
+        let parsed = parse_json_or_jsonc("{\n  \"alpha\": 1,\n  \"beta\": 2\n}")
+            .expect("plain json should parse directly");
+
+        assert_eq!(parsed["alpha"], 1);
+        assert_eq!(parsed["beta"], 2);
+    }
+
+    #[test]
+    fn parse_json_or_jsonc_strips_comment_and_preserves_content_like_value() {
+        let parsed = parse_json_or_jsonc(
+            "{\n  \"value\": \"protocol://example.com/v1\",\n  \"commented\": 1 // trailing marker\n}",
+        )
+        .expect("jsonc with comment should parse after strip");
+
+        assert_eq!(parsed["value"], "protocol://example.com/v1");
+        assert_eq!(parsed["commented"], 1);
+    }
+
+    #[test]
+    fn strip_line_comments_handles_forward_slash_outside_string_without_comment() {
+        let input =
+            "{\"value\": 4 / 2, \"url\": \"https://example.com\"} // arithmetic trailing comment";
+        let stripped = strip_line_comments(input);
+
+        assert_eq!(
+            stripped.trim(),
+            "{\"value\": 4 / 2, \"url\": \"https://example.com\"}"
+        );
+        assert!(stripped.contains("\"value\": 4 / 2"));
+        assert!(!stripped.contains("// arithmetic trailing comment"));
+    }
+
+    #[test]
+    fn parse_json_or_jsonc_prefers_plain_json_without_stripping() {
+        let parsed = parse_json_or_jsonc(
+            "{\"url\":\"https://example.com/path\", \"query\":\"value // not a comment\"}",
+        )
+        .expect("plain json should bypass jsonc fallback path");
+
+        assert_eq!(parsed["url"], "https://example.com/path");
+        assert_eq!(parsed["query"], "value // not a comment");
+    }
+
+    #[test]
+    fn parse_json_or_jsonc_tolerates_leading_comment_on_first_line() {
+        let parsed = parse_json_or_jsonc("// generated\n{\"value\": 1}")
+            .expect("jsonc with leading comment line should parse");
+
+        assert_eq!(parsed["value"], 1);
+    }
+
+    #[test]
+    fn parse_json_or_jsonc_handles_multiple_comment_lines_and_trailing_comment() {
+        let parsed = parse_json_or_jsonc(
+            "// top comment\n{\n  \"value\": 1,\n  // inline block marker\n  \"flag\": true // trailing inline comment\n}\n",
+        )
+        .expect("jsonc with multiple comments should parse");
+
+        assert_eq!(parsed["value"], 1);
+        assert_eq!(parsed["flag"], true);
+    }
+
+    #[test]
+    fn parse_json_or_jsonc_accepts_comment_only_prefix_lines() {
+        let parsed = parse_json_or_jsonc("// leading comment\n// another comment\n{\"value\":1}\n")
+            .expect("comment-only prefix should still parse json payload");
+
+        assert_eq!(parsed["value"], 1);
+    }
+
+    #[test]
+    fn parse_json_or_jsonc_rejects_comment_only_content() {
+        let err = parse_json_or_jsonc("// only a comment\n// no payload")
+            .expect_err("comments-only file should not parse as valid openclaw json");
+        assert!(
+            err.to_string()
+                .contains("failed to parse openclaw as json or jsonc")
+        );
+    }
+
+    #[test]
+    fn strip_line_comments_remains_accurate_after_multiple_comment_blocks() {
+        let input = [
+            "// header",
+            "{",
+            "  \"url\": \"https://example.com/a\", // first inline",
+            "  \"safe\": \"http://example.com/b\",",
+            "  \"value\": 1 // last inline",
+            "}",
+        ]
+        .join("\n");
+        let stripped = strip_line_comments(&input);
+
+        assert_eq!(
+            stripped.trim(),
+            "{\n  \"url\": \"https://example.com/a\", \n  \"safe\": \"http://example.com/b\",\n  \"value\": 1 \n}"
+        );
+    }
+
+    #[test]
+    fn parse_json_or_jsonc_preserves_comment_markers_inside_strings() {
+        let parsed = parse_json_or_jsonc(
+            r#"{
+  "endpoint": "https://example.com/v1/api",
+  "raw": "look // this is not a comment",
+  "quoted": "escaped \" quote // also not a comment",
+  // strip this line
+  "ok": true // trailing comment
+}"#,
+        )
+        .expect("jsonc containing comment-like text in strings should parse");
+
+        assert_eq!(parsed["endpoint"], "https://example.com/v1/api");
+        assert_eq!(parsed["raw"], "look // this is not a comment");
+        assert_eq!(parsed["quoted"], "escaped \" quote // also not a comment");
+        assert!(parsed["ok"].as_bool().unwrap_or(false));
+    }
+
+    #[test]
+    fn strip_line_comments_keeps_escaped_characters_and_url_protocols() {
+        let input = r#"{"value":"https://example.com/path"} // trailing comment"#;
+        let stripped = strip_line_comments(input);
+
+        assert_eq!(stripped.trim(), r#"{"value":"https://example.com/path"}"#);
+    }
+
+    #[test]
+    fn ensure_object_root_accepts_object_value() {
+        let mut doc = serde_json::json!({"ok": true});
+
+        ensure_object_root(&mut doc).expect("object root should be accepted");
+        assert_eq!(doc["ok"], true);
+    }
+
+    #[test]
+    fn ensure_object_root_rejects_non_object_root() {
+        let mut doc = serde_json::json!(true);
+
+        let err = ensure_object_root(&mut doc).expect_err("non-object root should fail");
+        assert!(
+            err.to_string()
+                .contains("openclaw document must be JSON object")
+        );
+    }
+
+    #[test]
+    fn strip_line_comments_preserves_division_slash_outside_string() {
+        let input = "{ \"value\": 4 / 2 }";
+        let stripped = strip_line_comments(input);
+
+        assert_eq!(stripped, input);
     }
 
     #[derive(Clone)]
@@ -358,5 +672,29 @@ mod tests {
 
         let current = fs::read_to_string(&file).expect("read restored file should work");
         assert_eq!(current, "{\"stable\":true}");
+    }
+
+    #[test]
+    fn parse_json_or_jsonc_preserves_escaped_quotes_and_comment_markers_in_string_content() {
+        let parsed = parse_json_or_jsonc(
+            r#"{
+  "value": "escaped \" quote // still text",
+  "raw": "https://example.com/resource"
+} // trailing comment"#,
+        )
+        .expect("string escapes and inline comments should be handled");
+
+        assert_eq!(parsed["value"], "escaped \" quote // still text");
+        assert_eq!(parsed["raw"], "https://example.com/resource");
+    }
+
+    #[test]
+    fn strip_line_comments_keeps_escaped_unicode_after_comment() {
+        let input = r#"{"value":"line \\\\\" // keep backslashes, then comment
+"more": "value"} // tail comment"#;
+        let stripped = strip_line_comments(input);
+
+        assert!(stripped.contains(r#""value":"line \\\\\"#));
+        assert!(stripped.contains(r#""more": "value""#));
     }
 }

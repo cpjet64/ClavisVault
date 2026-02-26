@@ -8,14 +8,14 @@
 
 ## Current state (2026-02-24)
 - Core summary:
-  - Lines: `87.80%` (4,589 covered / 560 missed, as of latest `cargo llvm-cov`)
-  - Functions: `79.48%` (458 covered / 94 missed, as of latest `cargo llvm-cov`)
-- Largest debt files:
-  - `crates/core/src/safe_file.rs` (Lines `69.23%`, Functions `56.86%`)
-  - `crates/core/src/shell.rs` (Lines `70.49%`, Functions `70.00%`)
-  - `crates/core/src/audit_log.rs` (Lines `86.23%`, Functions `80.00%`)
-  - `crates/core/src/types.rs` (Lines `87.65%`, Functions `76.60%`)
-  - `crates/core/src/encryption.rs` (Lines `87.58%`, Functions `86.67%`)
+  - Lines: `94.37%` (5,147 covered / 274 missed, as of latest `cargo llvm-cov`)
+  - Functions: `90.55%` (460 covered / 48 missed, as of latest `cargo llvm-cov`)
+ - Largest debt files:
+  - `crates/core/src/project_linker.rs` (Lines `88.83%`, Functions `83.33%`)
+  - `crates/core/src/encryption.rs` (Lines `75.35%`, Functions `75.56%`)
+  - `crates/core/src/audit_log.rs` (Lines `85.02%`, Functions `79.17%`)
+  - `crates/core/src/openclaw.rs` (Lines `97.36%`, Functions `93.55%`)
+  - `crates/core/src/policy.rs` (Lines `98.19%`, Functions `97.62%`)
 
 ## Working assumption
 - This is a **core IN-PROGRESS** cycle while the required core coverage gate remains unresolved.
@@ -61,9 +61,10 @@
   - `derive_master_key` failure handling if Argon2 parameter derivation/config fails in unusual salt/time conditions (guarded with deterministic fixture where feasible).
 
 6. Finish `safe_file.rs` atomic write/error branches and privilege-sensitive determinism
-- [ ] Cover deterministic non-error branches for backup name/path handling and backup write+readback restoration.
-- [ ] Add explicit tests for `atomic_replace_path_with` candidate exhaustion and malformed `parent` paths where parent can be represented.
+- [x] Cover deterministic non-error branches for backup name/path handling and backup write+readback restoration.
+- [x] Add explicit tests for `atomic_replace_path_with` candidate exhaustion and malformed `parent` paths where parent can be represented.
 - [ ] Keep privileged-environment-conditional tests as dual-path asserts (`Err` vs `Ok`) to prevent flake.
+- [x] Add recovery-path coverage for delayed backup cleanup branches in `safe_file.rs` while retaining delayed-failure assertions.
 
 7. Close remaining low-volume misses in small modules
 - [ ] `openclaw.rs`: line-level branch near parse fallback and comment insertion.

@@ -603,6 +603,49 @@ mod tests {
     }
 
     #[test]
+    fn decrypt_export_rejects_checksum_mismatch_without_altering_manifest() {
+        let vault = VaultData::new([21; 16]);
+        let original = encrypt_export(&vault, "export-passphrase").expect("export should work");
+        let mut archive =
+            ZipArchive::new(Cursor::new(original.clone())).expect("parse archive to extract");
+
+        let mut manifest_json = Vec::new();
+        archive
+            .by_name_decrypt(EXPORT_MANIFEST_PATH, "export-passphrase".as_bytes())
+            .expect("read manifest")
+            .read_to_end(&mut manifest_json)
+            .expect("read manifest bytes");
+
+        let mut payload = Vec::new();
+        archive
+            .by_name_decrypt(EXPORT_PAYLOAD_PATH, "export-passphrase".as_bytes())
+            .expect("read payload")
+            .read_to_end(&mut payload)
+            .expect("read payload bytes");
+
+        payload.push(b' ');
+
+        let passphrase_owned = Zeroizing::new("export-passphrase".to_string());
+        let options = SimpleFileOptions::default()
+            .compression_method(CompressionMethod::Deflated)
+            .with_aes_encryption(AesMode::Aes256, passphrase_owned.as_str());
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        writer
+            .start_file(EXPORT_MANIFEST_PATH, options)
+            .expect("start manifest");
+        writer.write_all(&manifest_json).expect("write manifest");
+        writer
+            .start_file(EXPORT_PAYLOAD_PATH, options)
+            .expect("start payload");
+        writer.write_all(&payload).expect("write payload");
+        let tampered = writer.finish().expect("finish archive").into_inner();
+
+        let err = decrypt_export_with_metadata(&tampered, "export-passphrase")
+            .expect_err("checksum mismatch should fail");
+        assert!(err.to_string().contains("export payload checksum mismatch"));
+    }
+
+    #[test]
     fn decrypt_export_rejects_unknown_legacy_manifest_version() {
         let vault = VaultData::new([18; 16]);
         let payload = serde_json::to_vec(&vault).expect("serialize");
@@ -658,6 +701,20 @@ mod tests {
         );
         let trust = evaluate_export_signer_trust(&metadata, &policy).expect("trust eval");
         assert_eq!(trust, ExportSignerTrust::Mismatch);
+    }
+
+    #[test]
+    fn evaluate_export_signer_trust_reports_legacy_manifest() {
+        let metadata = DecryptedExportMetadata {
+            legacy_manifest: true,
+            signer_key_id: None,
+            signer_public_key: None,
+            payload_sha256: "payload".to_string(),
+        };
+
+        let trust = evaluate_export_signer_trust(&metadata, &ExportSignerTrustPolicy::default())
+            .expect("legacy trust should be accepted");
+        assert_eq!(trust, ExportSignerTrust::LegacyManifest);
     }
 
     #[test]

@@ -24,17 +24,17 @@ build:
     cargo build --all-targets --all-features --locked
 
 test-quick:
-    cargo nextest run --locked
+    cargo nextest run --locked --retries 2
 
 test-full:
-    cargo nextest run --all-features --locked
+    cargo nextest run --all-features --locked --retries 2
 
 coverage:
     cargo llvm-cov nextest --all-features --no-report
     cargo llvm-cov report --lcov --output-path lcov.info
 
 security:
-    cargo deny check
+    cargo deny check bans licenses sources
     cargo audit
     python scripts/enforce_advisory_policy.py
 

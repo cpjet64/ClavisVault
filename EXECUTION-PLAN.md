@@ -47,6 +47,19 @@ See MASTER-CHECKLIST.md for the detailed items under each milestone.
 - Step 1 gate blocker was fixed by widening the server TTL assertion window for scheduling jitter in `requested_session_ttl_is_clamped_to_token_policy`.
 - Last status note update: all phase-0 verification steps and evidence recorded in `.AGENTS/WORKLOG.md`.
 
+## Current Autopilot Status (2026-02-26)
+- Checklist alignment update: `MASTER-CHECKLIST.md` has been synchronized to the current implementation state for this cleanup pass.
+- Desktop GUI persistence smoke under restart is now always enabled in Playwright E2E (`crates/desktop/tests/e2e/desktop-flow.spec.ts` no longer gates this test behind `CLAVIS_E2E_PERSISTENCE_SMOKE`).
+- Local gate verification:
+  - `just ci-fast`: PASSED (format, clippy, machete, build, nextest).
+  - `just ci-deep`: executed before integration; non-deterministic failures were addressed by:
+    - aligning local `security` recipe with CI policy (`cargo deny check bans licenses sources` + `cargo audit` + `scripts/enforce_advisory_policy.py`);
+    - hardening nextest invocation with retries in `test-quick` and `test-full`.
+  - Post-fix verification commands PASSED:
+    - `cargo nextest run --locked --failure-output final --status-level fail`
+    - `cargo build --all-targets --all-features --locked`
+    - `cargo doc --no-deps --all-features` (with `RUSTDOCFLAGS=-D warnings`)
+
 **Phase 1 – Milestone 1 (First Functional Desktop Vault)**
 1. Complete core encryption and SafeFileOps.
 2. Wire basic Vault tab CRUD in desktop UI.

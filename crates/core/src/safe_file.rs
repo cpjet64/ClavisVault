@@ -512,25 +512,49 @@ mod tests {
         ops.atomic_write(&target, b"stable")
             .expect("seed write should work");
 
-        let mut call = 0;
+        use std::collections::VecDeque;
+
+        fn fail_initial(_: &Path, _: &Path) -> io::Result<()> {
+            Err(io::Error::other("initial rename blocked"))
+        }
+        fn succeed(_: &Path, _: &Path) -> io::Result<()> {
+            Ok(())
+        }
+        fn fail_staging(_: &Path, _: &Path) -> io::Result<()> {
+            Err(io::Error::other("staging rename failed"))
+        }
+        fn fail_restore(_: &Path, _: &Path) -> io::Result<()> {
+            Err(io::Error::other("restore failed"))
+        }
+        fn remove_ok(_: &Path) -> io::Result<()> {
+            Ok(())
+        }
+
+        let mut rename_results = VecDeque::from([
+            fail_initial as fn(&Path, &Path) -> io::Result<()>,
+            succeed as fn(&Path, &Path) -> io::Result<()>,
+            fail_staging as fn(&Path, &Path) -> io::Result<()>,
+            fail_restore as fn(&Path, &Path) -> io::Result<()>,
+        ]);
         let rename = |_from: &Path, _to: &Path| {
-            call += 1;
-            match call {
-                1 => Err(io::Error::other("initial rename blocked")),
-                2 => Ok(()),
-                3 => Err(io::Error::other("staging rename failed")),
-                4 => Err(io::Error::other("restore failed")),
-                _ => Ok(()),
-            }
+            let op = rename_results.pop_front().expect("unexpected rename call");
+            op(_from, _to)
         };
 
-        let remove_file = |_path: &Path| Ok(());
+        let mut remove_results = VecDeque::from([remove_ok as fn(&Path) -> io::Result<()>]);
+        let remove_file = |_path: &Path| {
+            let op = remove_results
+                .pop_front()
+                .expect("unexpected remove_file call");
+            op(_path)
+        };
 
         let err = ops
             .atomic_write_with_fs_ops(&target, b"updated", rename, remove_file)
             .expect_err("restore failure should fail");
         assert!(err.to_string().contains("failed to restore backup"));
-        assert_eq!(call, 4);
+        assert!(rename_results.is_empty());
+        assert!(remove_results.is_empty());
     }
 
     #[test]
@@ -541,35 +565,329 @@ mod tests {
         ops.atomic_write(&target, b"stable")
             .expect("seed write should work");
 
-        let mut call = 0;
+        use std::collections::VecDeque;
+
+        fn fail_initial(_: &Path, _: &Path) -> io::Result<()> {
+            Err(io::Error::other("initial rename blocked"))
+        }
+        fn move_target_to_backup(from: &Path, to: &Path) -> io::Result<()> {
+            fs::rename(from, to).expect("rename fallback simulation should succeed");
+            Ok(())
+        }
+        fn move_tmp_to_target(from: &Path, to: &Path) -> io::Result<()> {
+            fs::rename(from, to).expect("rename fallback simulation should succeed");
+            Ok(())
+        }
+        fn remove_delayed(_: &Path) -> io::Result<()> {
+            Err(io::Error::other("cleanup delayed"))
+        }
+
+        let mut rename_results = VecDeque::from([
+            fail_initial as fn(&Path, &Path) -> io::Result<()>,
+            move_target_to_backup as fn(&Path, &Path) -> io::Result<()>,
+            move_tmp_to_target as fn(&Path, &Path) -> io::Result<()>,
+        ]);
         let rename = |from: &Path, to: &Path| {
-            call += 1;
-            match call {
-                1 => Err(io::Error::other("initial rename blocked")),
-                2..=3 => {
-                    fs::rename(from, to).expect("rename fallback simulation should succeed");
-                    Ok(())
-                }
-                _ => Ok(()),
-            }
+            let op = rename_results.pop_front().expect("unexpected rename call");
+            op(from, to)
+        };
+
+        let mut remove_results = VecDeque::from([remove_delayed as fn(&Path) -> io::Result<()>]);
+        let remove_file = |_path: &Path| {
+            let op = remove_results
+                .pop_front()
+                .expect("unexpected remove_file call");
+            op(_path)
+        };
+
+        ops.atomic_write_with_fs_ops(&target, b"updated", rename, remove_file)
+            .expect("failed to write after recoverable swap should still work");
+        assert_eq!(rename_results.len(), 0);
+        assert_eq!(remove_results.len(), 0);
+        assert_eq!(
+            fs::read(&target).expect("target should contain updated payload"),
+            b"updated"
+        );
+    }
+
+    #[test]
+    fn atomic_write_existing_target_first_rename_failure_after_backup_write_cleanup_calls_ok_path()
+    {
+        let root = temp_dir("safe-file-existing-target-backup-cleanup-ok");
+        let target = root.join("vault.cv");
+        let ops = LocalSafeFileOps::default();
+        ops.atomic_write(&target, b"stable")
+            .expect("seed write should work");
+
+        use std::collections::VecDeque;
+
+        fn fail_initial(_: &Path, _: &Path) -> io::Result<()> {
+            Err(io::Error::other("initial rename blocked"))
+        }
+        fn move_target_to_backup(from: &Path, to: &Path) -> io::Result<()> {
+            fs::rename(from, to).expect("rename fallback simulation should succeed");
+            Ok(())
+        }
+        fn move_tmp_to_target(from: &Path, to: &Path) -> io::Result<()> {
+            fs::rename(from, to).expect("rename fallback simulation should succeed");
+            Ok(())
+        }
+        fn remove_ok(_: &Path) -> io::Result<()> {
+            Ok(())
+        }
+
+        let mut rename_results = VecDeque::from([
+            fail_initial as fn(&Path, &Path) -> io::Result<()>,
+            move_target_to_backup as fn(&Path, &Path) -> io::Result<()>,
+            move_tmp_to_target as fn(&Path, &Path) -> io::Result<()>,
+        ]);
+        let rename = |from: &Path, to: &Path| {
+            let op = rename_results.pop_front().expect("unexpected rename call");
+            op(from, to)
+        };
+
+        let mut remove_results = VecDeque::from([remove_ok as fn(&Path) -> io::Result<()>]);
+        let remove_file = |_path: &Path| {
+            let op = remove_results
+                .pop_front()
+                .expect("unexpected remove_file call");
+            op(_path)
+        };
+
+        ops.atomic_write_with_fs_ops(&target, b"updated", rename, remove_file)
+            .expect("recovery cleanup with ok path should still succeed");
+        assert_eq!(rename_results.len(), 0);
+        assert_eq!(remove_results.len(), 0);
+        assert_eq!(
+            fs::read(&target).expect("target should contain updated payload"),
+            b"updated"
+        );
+    }
+
+    #[test]
+    fn atomic_write_existing_target_first_rename_failure_after_backup_write_clears_backup_successfully()
+     {
+        let root = temp_dir("safe-file-existing-target-backup-cleared");
+        let target = root.join("vault.cv");
+        let ops = LocalSafeFileOps::default();
+        ops.atomic_write(&target, b"stable")
+            .expect("seed write should work");
+
+        use std::collections::VecDeque;
+        fn fail_initial(_: &Path, _: &Path) -> io::Result<()> {
+            Err(io::Error::other("initial rename blocked"))
+        }
+        fn move_target_to_backup(from: &Path, to: &Path) -> io::Result<()> {
+            fs::rename(from, to).expect("backup move should succeed");
+            Ok(())
+        }
+        fn move_tmp_to_target(from: &Path, to: &Path) -> io::Result<()> {
+            fs::rename(from, to).expect("tmp-to-target move should succeed");
+            Ok(())
+        }
+        fn remove_ok(_: &Path) -> io::Result<()> {
+            Ok(())
+        }
+
+        let mut rename_results = VecDeque::from([
+            fail_initial as fn(&Path, &Path) -> io::Result<()>,
+            move_target_to_backup as fn(&Path, &Path) -> io::Result<()>,
+            move_tmp_to_target as fn(&Path, &Path) -> io::Result<()>,
+        ]);
+        let rename = |from: &Path, to: &Path| {
+            let op = rename_results.pop_front().expect("unexpected rename call");
+            op(from, to)
         };
 
         let mut remove_count = 0;
         let remove_file = |_path: &Path| {
             remove_count += 1;
-            if remove_count == 1 {
-                Err(io::Error::other("cleanup delayed"))
-            } else {
-                Ok(())
-            }
+            remove_ok(_path)
         };
 
         ops.atomic_write_with_fs_ops(&target, b"updated", rename, remove_file)
-            .expect("failed to write after recoverable swap should still work");
+            .expect("recovery cleanup should still succeed");
+        assert_eq!(rename_results.len(), 0);
         assert_eq!(remove_count, 1);
         assert_eq!(
             fs::read(&target).expect("target should contain updated payload"),
             b"updated"
+        );
+    }
+
+    #[test]
+    fn atomic_write_existing_target_staging_failure_after_backup_recovery_calls_restore_cleanup() {
+        let root = temp_dir("safe-file-existing-target-restore-path");
+        let target = root.join("vault.cv");
+        let ops = LocalSafeFileOps::default();
+        ops.atomic_write(&target, b"stable")
+            .expect("seed write should work");
+
+        use std::collections::VecDeque;
+
+        fn fail_initial(_: &Path, _: &Path) -> io::Result<()> {
+            Err(io::Error::other("initial rename blocked"))
+        }
+        fn move_target_to_backup(from: &Path, to: &Path) -> io::Result<()> {
+            fs::rename(from, to).expect("backup move should succeed");
+            Ok(())
+        }
+        fn fail_staging(_: &Path, _: &Path) -> io::Result<()> {
+            Err(io::Error::other("staging rename failed"))
+        }
+        fn restore(from: &Path, to: &Path) -> io::Result<()> {
+            fs::rename(from, to).expect("restore move should succeed");
+            Ok(())
+        }
+        fn remove_delayed(_: &Path) -> io::Result<()> {
+            Err(io::Error::other("cleanup delayed"))
+        }
+
+        let mut rename_results = VecDeque::from([
+            fail_initial as fn(&Path, &Path) -> io::Result<()>,
+            move_target_to_backup as fn(&Path, &Path) -> io::Result<()>,
+            fail_staging as fn(&Path, &Path) -> io::Result<()>,
+            restore as fn(&Path, &Path) -> io::Result<()>,
+        ]);
+        let rename = |from: &Path, to: &Path| {
+            let op = rename_results.pop_front().expect("unexpected rename call");
+            op(from, to)
+        };
+
+        let mut remove_results = VecDeque::from([remove_delayed as fn(&Path) -> io::Result<()>]);
+        let remove_file = |_path: &Path| {
+            let op = remove_results
+                .pop_front()
+                .expect("unexpected remove_file call");
+            op(_path)
+        };
+
+        let err = ops
+            .atomic_write_with_fs_ops(&target, b"updated", rename, remove_file)
+            .expect_err("staging failure should return original error");
+        assert_eq!(rename_results.len(), 0);
+        assert_eq!(remove_results.len(), 0);
+        assert!(err.to_string().contains("failed replacing existing file"));
+        assert_eq!(
+            fs::read(&target).expect("target should remain original"),
+            b"stable"
+        );
+    }
+
+    #[test]
+    fn atomic_write_existing_target_staging_failure_after_backup_recovery_cleans_tmp_with_ok_cleanup()
+     {
+        let root = temp_dir("safe-file-existing-target-restore-cleanup-ok");
+        let target = root.join("vault.cv");
+        let ops = LocalSafeFileOps::default();
+        ops.atomic_write(&target, b"stable")
+            .expect("seed write should work");
+
+        use std::collections::VecDeque;
+
+        fn fail_initial(_: &Path, _: &Path) -> io::Result<()> {
+            Err(io::Error::other("initial rename blocked"))
+        }
+        fn move_target_to_backup(from: &Path, to: &Path) -> io::Result<()> {
+            fs::rename(from, to).expect("backup move should succeed");
+            Ok(())
+        }
+        fn fail_staging(_: &Path, _: &Path) -> io::Result<()> {
+            Err(io::Error::other("staging rename failed"))
+        }
+        fn restore(from: &Path, to: &Path) -> io::Result<()> {
+            fs::rename(from, to).expect("restore move should succeed");
+            Ok(())
+        }
+        fn remove_ok(_: &Path) -> io::Result<()> {
+            Ok(())
+        }
+
+        let mut rename_results = VecDeque::from([
+            fail_initial as fn(&Path, &Path) -> io::Result<()>,
+            move_target_to_backup as fn(&Path, &Path) -> io::Result<()>,
+            fail_staging as fn(&Path, &Path) -> io::Result<()>,
+            restore as fn(&Path, &Path) -> io::Result<()>,
+        ]);
+        let rename = |from: &Path, to: &Path| {
+            let op = rename_results.pop_front().expect("unexpected rename call");
+            op(from, to)
+        };
+
+        let mut remove_results = VecDeque::from([remove_ok as fn(&Path) -> io::Result<()>]);
+        let remove_file = |_path: &Path| {
+            let op = remove_results
+                .pop_front()
+                .expect("unexpected remove_file call");
+            op(_path)
+        };
+
+        let err = ops
+            .atomic_write_with_fs_ops(&target, b"updated", rename, remove_file)
+            .expect_err("staging failure should return original error");
+        assert_eq!(rename_results.len(), 0);
+        assert_eq!(remove_results.len(), 0);
+        assert!(err.to_string().contains("failed replacing existing file"));
+        assert_eq!(
+            fs::read(&target).expect("target should remain original"),
+            b"stable"
+        );
+    }
+
+    #[test]
+    fn atomic_write_existing_target_staging_failure_after_backup_recovery_cleans_tmp_with_success()
+    {
+        let root = temp_dir("safe-file-existing-target-restore-clean-tmp");
+        let target = root.join("vault.cv");
+        let ops = LocalSafeFileOps::default();
+        ops.atomic_write(&target, b"stable")
+            .expect("seed write should work");
+
+        use std::collections::VecDeque;
+        fn fail_initial(_: &Path, _: &Path) -> io::Result<()> {
+            Err(io::Error::other("initial rename blocked"))
+        }
+        fn move_target_to_backup(from: &Path, to: &Path) -> io::Result<()> {
+            fs::rename(from, to).expect("backup move should succeed");
+            Ok(())
+        }
+        fn fail_staging(_: &Path, _: &Path) -> io::Result<()> {
+            Err(io::Error::other("staging rename failed"))
+        }
+        fn restore(from: &Path, to: &Path) -> io::Result<()> {
+            fs::rename(from, to).expect("restore move should succeed");
+            Ok(())
+        }
+        fn remove_ok(_: &Path) -> io::Result<()> {
+            Ok(())
+        }
+
+        let mut rename_results = VecDeque::from([
+            fail_initial as fn(&Path, &Path) -> io::Result<()>,
+            move_target_to_backup as fn(&Path, &Path) -> io::Result<()>,
+            fail_staging as fn(&Path, &Path) -> io::Result<()>,
+            restore as fn(&Path, &Path) -> io::Result<()>,
+        ]);
+        let rename = |from: &Path, to: &Path| {
+            let op = rename_results.pop_front().expect("unexpected rename call");
+            op(from, to)
+        };
+
+        let mut remove_count = 0;
+        let remove_file = |_path: &Path| {
+            remove_count += 1;
+            remove_ok(_path)
+        };
+
+        let err = ops
+            .atomic_write_with_fs_ops(&target, b"updated", rename, remove_file)
+            .expect_err("staging failure should return original error");
+        assert_eq!(rename_results.len(), 0);
+        assert_eq!(remove_count, 1);
+        assert!(err.to_string().contains("failed replacing existing file"));
+        assert_eq!(
+            fs::read(&target).expect("target should remain original"),
+            b"stable"
         );
     }
 

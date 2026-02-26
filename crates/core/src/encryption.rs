@@ -19,6 +19,34 @@ const DERIVED_KEY_LEN: usize = 32;
 const WIPE_THRESHOLD: u32 = 10;
 const MAX_BACKOFF_SECONDS: i64 = 300;
 
+#[cfg(test)]
+thread_local! {
+    static FORCE_INVALID_PARAMS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+fn with_forced_invalid_params<R>(f: impl FnOnce() -> R) -> R {
+    FORCE_INVALID_PARAMS.with(|cell| cell.set(true));
+    let result = f();
+    FORCE_INVALID_PARAMS.with(|cell| cell.set(false));
+    result
+}
+
+fn derive_master_key_params() -> Result<Params> {
+    #[cfg(test)]
+    if FORCE_INVALID_PARAMS.with(|cell| cell.get()) {
+        return Err(anyhow!("forced invalid argon2 params for test"));
+    }
+
+    Params::new(
+        ARGON2_MEMORY_KIB,
+        ARGON2_TIME_COST,
+        ARGON2_PARALLELISM,
+        Some(DERIVED_KEY_LEN),
+    )
+    .map_err(anyhow::Error::from)
+}
+
 pub trait BiometricUnlockHook {
     fn authenticate(&self, prompt: &str) -> Result<bool>;
 }
@@ -73,13 +101,9 @@ impl PasswordAttemptLimiter {
     }
 }
 
+#[cfg_attr(test, inline(never))]
 pub fn derive_master_key(password: &str, salt: &[u8; 16]) -> Result<MasterKey> {
-    let params = Params::new(
-        ARGON2_MEMORY_KIB,
-        ARGON2_TIME_COST,
-        ARGON2_PARALLELISM,
-        Some(DERIVED_KEY_LEN),
-    )?;
+    let params = derive_master_key_params()?;
 
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     let mut key = [0_u8; DERIVED_KEY_LEN];
@@ -90,6 +114,7 @@ pub fn derive_master_key(password: &str, salt: &[u8; 16]) -> Result<MasterKey> {
     Ok(MasterKey::new(key.to_vec()))
 }
 
+#[cfg_attr(test, inline(never))]
 pub fn lock_vault(
     path: impl Into<std::path::PathBuf>,
     vault: &VaultData,
@@ -122,6 +147,7 @@ pub fn lock_vault(
     })
 }
 
+#[cfg_attr(test, inline(never))]
 pub fn unlock_vault(encrypted: &EncryptedVault, master_key: &MasterKey) -> Result<VaultData> {
     let cipher = ChaCha20Poly1305::new_from_slice(master_key.as_slice())
         .map_err(|_| anyhow!("invalid key length"))?;
@@ -142,6 +168,7 @@ pub fn unlock_vault(encrypted: &EncryptedVault, master_key: &MasterKey) -> Resul
     Ok(decoded)
 }
 
+#[cfg_attr(test, inline(never))]
 pub fn unlock_with_password_or_biometric(
     encrypted: &EncryptedVault,
     password: Option<&str>,
@@ -191,6 +218,14 @@ mod tests {
     impl BiometricUnlockHook for RejectingBiometric {
         fn authenticate(&self, _prompt: &str) -> Result<bool> {
             Ok(false)
+        }
+    }
+
+    struct ErrorBiometric;
+
+    impl BiometricUnlockHook for ErrorBiometric {
+        fn authenticate(&self, _prompt: &str) -> Result<bool> {
+            Err(anyhow!("biometric unavailable"))
         }
     }
 
@@ -281,6 +316,19 @@ mod tests {
                 .expect("cached key unlock should work");
 
         assert_eq!(by_password.keys, by_cached.keys);
+    }
+
+    #[test]
+    fn unlock_with_biometric_and_cached_key() {
+        let vault = sample_vault(109);
+        let key = derive_master_key("pass", &vault.salt).expect("derive key should work");
+        let encrypted = lock_vault("vault.cv", &vault, &key).expect("encrypt should work");
+
+        let by_biometric =
+            unlock_with_password_or_biometric(&encrypted, None, Some(&FakeBiometric), Some(&key))
+                .expect("biometric path should unlock when no password");
+
+        assert_eq!(by_biometric.keys.len(), vault.keys.len());
     }
 
     #[test]
@@ -392,6 +440,39 @@ mod tests {
     }
 
     #[test]
+    fn unlock_vault_reports_corrupt_payload_decode() {
+        let vault = sample_vault(103);
+        let key = derive_master_key("pass", &vault.salt).expect("derive key should work");
+        let cipher = ChaCha20Poly1305::new_from_slice(key.as_slice())
+            .expect("valid key should create cipher");
+
+        let nonce = [1_u8; 12];
+        let garbage_payload = [0xDE_u8, 0xAD, 0xBE, 0xEF];
+        let ciphertext = cipher
+            .encrypt(&nonce.into(), garbage_payload.as_ref())
+            .expect("encrypt garbage payload");
+
+        let encrypted = EncryptedVault {
+            path: "vault.cv".into(),
+            header: EncryptedHeader {
+                version: vault.version,
+                nonce,
+                salt: vault.salt,
+            },
+            ciphertext,
+        };
+
+        let result = unlock_vault(&encrypted, &key);
+        assert!(result.is_err());
+        assert!(
+            result
+                .expect_err("corrupt payload should fail decoding")
+                .to_string()
+                .contains("failed to decode decrypted vault data")
+        );
+    }
+
+    #[test]
     fn unlock_with_wrong_password_reports_error() {
         let vault = sample_vault(103);
         let key = derive_master_key("correct-horse", &vault.salt).expect("derive key should work");
@@ -404,6 +485,213 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("decryption failed")
+        );
+    }
+
+    #[test]
+    fn unlock_prefers_password_over_biometric_and_cached() {
+        let vault = sample_vault(104);
+        let password_key = derive_master_key("pass", &vault.salt).expect("derive key should work");
+        let encrypted = lock_vault("vault.cv", &vault, &password_key).expect("encrypt");
+        let cached_key = derive_master_key("cached", &vault.salt).expect("derive key should work");
+
+        let result = unlock_with_password_or_biometric(
+            &encrypted,
+            Some("wrong-pass"),
+            Some(&FakeBiometric),
+            Some(&cached_key),
+        );
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("decryption failed")
+        );
+    }
+
+    #[test]
+    fn unlock_with_empty_password_is_explicitly_supported() {
+        let vault = sample_vault(105);
+        let key = derive_master_key("", &vault.salt).expect("derive empty password should work");
+        let encrypted = lock_vault("vault.cv", &vault, &key).expect("encrypt");
+
+        let unlocked = unlock_with_password_or_biometric(
+            &encrypted,
+            Some(""),
+            Some(&RejectingBiometric),
+            None,
+        )
+        .expect("empty password should unlock");
+
+        assert_eq!(unlocked.keys.len(), vault.keys.len());
+    }
+
+    #[test]
+    fn unlock_with_cached_key_but_incorrect_password_like_key_fails_to_decrypt() {
+        let vault = sample_vault(106);
+        let key = derive_master_key("correct", &vault.salt).expect("derive key should work");
+        let wrong_key =
+            derive_master_key("incorrect", &vault.salt).expect("derive wrong key should work");
+        let encrypted = lock_vault("vault.cv", &vault, &key).expect("encrypt");
+
+        let result = unlock_with_password_or_biometric(&encrypted, None, None, Some(&wrong_key));
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("decryption failed")
+        );
+    }
+
+    #[test]
+    fn unlock_with_biometric_authentication_error_bubbles_error() {
+        let vault = sample_vault(107);
+        let key = derive_master_key("password", &vault.salt).expect("derive key should work");
+        let encrypted = lock_vault("vault.cv", &vault, &key).expect("encrypt");
+
+        let err =
+            unlock_with_password_or_biometric(&encrypted, None, Some(&ErrorBiometric), Some(&key))
+                .expect_err("biometric error should fail unlock");
+
+        assert!(err.to_string().contains("biometric unavailable"));
+    }
+
+    #[test]
+    fn derive_master_key_reports_param_error() {
+        let result = with_forced_invalid_params(|| derive_master_key("password", &[0; 16]));
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("forced invalid argon2 params")
+        );
+    }
+
+    #[test]
+    fn derive_master_key_params_uses_expected_costs() {
+        let params = derive_master_key_params().expect("expected params should be available");
+
+        assert_eq!(params.m_cost(), ARGON2_MEMORY_KIB);
+        assert_eq!(params.t_cost(), ARGON2_TIME_COST);
+        assert_eq!(params.p_cost(), ARGON2_PARALLELISM);
+        assert_eq!(params.output_len(), Some(DERIVED_KEY_LEN));
+    }
+
+    #[test]
+    fn derive_master_key_params_resets_forced_failure_path() {
+        with_forced_invalid_params(|| {
+            assert!(derive_master_key_params().is_err());
+        });
+
+        let params = derive_master_key_params().expect("forced path should be cleared");
+        assert_eq!(params.m_cost(), ARGON2_MEMORY_KIB);
+        assert_eq!(params.t_cost(), ARGON2_TIME_COST);
+        assert_eq!(params.p_cost(), ARGON2_PARALLELISM);
+    }
+
+    #[test]
+    fn derive_master_key_recovers_from_forced_param_failure() {
+        with_forced_invalid_params(|| {
+            assert!(
+                derive_master_key("pass", &[0; 16]).is_err(),
+                "forced invalid params should fail while enabled"
+            );
+        });
+        let key =
+            derive_master_key("pass", &[0; 16]).expect("forced flag should reset after scope");
+        assert_eq!(key.as_slice().len(), DERIVED_KEY_LEN);
+    }
+
+    #[test]
+    fn unlock_with_biometric_only_without_cached_key_returns_no_credentials_error() {
+        let vault = sample_vault(108);
+        let key = derive_master_key("pass", &vault.salt).expect("derive key should work");
+        let encrypted = lock_vault("vault.cv", &vault, &key).expect("encrypt should work");
+
+        let err = unlock_with_password_or_biometric(&encrypted, None, Some(&FakeBiometric), None)
+            .expect_err("biometric without cached key should fail");
+        assert!(
+            err.to_string()
+                .contains("no valid password, biometric, or cached key")
+        );
+    }
+
+    #[test]
+    fn attempt_limiter_saturates_backoff_and_marks_wipe_recommended() {
+        let now = Utc::now();
+        let mut limiter = PasswordAttemptLimiter::new(now);
+
+        for _ in 0..10 {
+            let decision = limiter.register_failure(now);
+            let backoff = decision.backoff.as_secs();
+            assert!(backoff <= MAX_BACKOFF_SECONDS as u64);
+        }
+
+        let decision = limiter.register_failure(now);
+        assert!(decision.wipe_recommended);
+        assert_eq!(
+            decision.backoff,
+            ChronoDuration::seconds(256).to_std().unwrap()
+        );
+
+        assert_eq!(limiter.failed_attempts(), 11);
+        assert!(!limiter.can_attempt(now));
+        assert!(limiter.can_attempt(decision.can_retry_at));
+    }
+
+    #[test]
+    fn attempt_limiter_records_success_reset_time_and_fail_count() {
+        let now = Utc::now();
+        let mut limiter = PasswordAttemptLimiter::new(now);
+        limiter.register_failure(now);
+        limiter.register_failure(now);
+        assert!(limiter.failed_attempts() > 0);
+
+        limiter.register_success(now);
+        assert_eq!(limiter.failed_attempts(), 0);
+        assert!(limiter.can_attempt(now));
+    }
+
+    #[test]
+    fn attempt_limiter_enforces_retry_window_and_resets_to_now_after_success() {
+        let now = Utc::now();
+        let mut limiter = PasswordAttemptLimiter::new(now);
+
+        let decision = limiter.register_failure(now);
+        assert_eq!(
+            decision.backoff,
+            ChronoDuration::seconds(1).to_std().unwrap()
+        );
+        assert!(!limiter.can_attempt(now));
+        assert!(!limiter.can_attempt(decision.can_retry_at - ChronoDuration::seconds(1)));
+        assert!(limiter.can_attempt(decision.can_retry_at));
+
+        limiter.register_success(decision.can_retry_at);
+        assert!(limiter.can_attempt(decision.can_retry_at));
+        assert_eq!(limiter.failed_attempts(), 0);
+    }
+
+    #[test]
+    fn attempt_limiter_backoff_caps_at_maximum_interval() {
+        let mut now = Utc::now();
+        let mut limiter = PasswordAttemptLimiter::new(now);
+
+        for _ in 0..20 {
+            let decision = limiter.register_failure(now);
+            assert!(decision.backoff.as_secs() <= MAX_BACKOFF_SECONDS as u64);
+            now = decision.can_retry_at;
+        }
+
+        let final_decision = limiter.register_failure(now);
+        assert!(final_decision.wipe_recommended);
+        let backoff_seconds = (1_i64 << 8).min(MAX_BACKOFF_SECONDS);
+        assert_eq!(
+            final_decision.backoff,
+            ChronoDuration::seconds(backoff_seconds).to_std().unwrap()
         );
     }
 }

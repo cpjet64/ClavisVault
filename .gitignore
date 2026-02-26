@@ -41,6 +41,9 @@ fuzz/artifacts/
 fuzz/coverage/
 __pycache__/
 **/__pycache__/
+test-results/
+**/test-results/
+tests/e2e/.e2e-state.json
 
 # ------------------------------
 # Logs / runtime temp files
@@ -53,6 +56,7 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+tmp_*.md
 
 # ------------------------------
 # Secrets / local env state

@@ -127,6 +127,7 @@ fn validate_rule(
     }
 }
 
+#[cfg_attr(test, inline(never))]
 fn pattern_matches(pattern: &str, value: &str) -> bool {
     if pattern.is_empty() {
         return value.is_empty();
@@ -163,7 +164,7 @@ fn pattern_matches(pattern: &str, value: &str) -> bool {
             }
         }
     } else if let Some(prefix) = segments.first() {
-        if prefix.is_empty() || !tail.starts_with(prefix) {
+        if !tail.starts_with(prefix) {
             return false;
         }
         tail = &tail[prefix.len()..];
@@ -173,12 +174,6 @@ fn pattern_matches(pattern: &str, value: &str) -> bool {
     let end_anchor = if ends_with_wildcard {
         None
     } else {
-        while let Some(last) = segments.last() {
-            if !last.is_empty() {
-                break;
-            }
-            segments.pop();
-        }
         segments.pop()
     };
 
@@ -531,5 +526,154 @@ max_age_days = 30
         assert!(pattern_matches("**A**", "zzAyy"));
         assert!(pattern_matches("*A*", "A"));
         assert!(!pattern_matches("*A**", "B"));
+    }
+
+    #[test]
+    fn pattern_matches_starts_with_wildcard_requires_first_segment_match() {
+        assert!(!pattern_matches("*TOKEN", "OPENAI_API_KEY"));
+    }
+
+    #[test]
+    fn pattern_matches_handles_consecutive_wildcards_and_empty_internal_segments() {
+        assert!(pattern_matches("OPENAI**KEY", "OPENAI--SUPER--KEY"));
+        assert!(pattern_matches("OPENAI***_KEY", "OPENAI----_KEY"));
+        assert!(!pattern_matches("OPENAI**MISSING", "OPENAI--TOKEN"));
+    }
+
+    #[test]
+    fn pattern_matches_starts_with_multiple_wildcards_and_skips_empty_prefixes() {
+        assert!(pattern_matches("**SECRET**KEY", "PREFIX_SECRET_KEY"));
+        assert!(!pattern_matches("**SECRET**", "prefix-secret"));
+        assert!(!pattern_matches("**SECRET**", "prefix"));
+    }
+
+    #[test]
+    fn pattern_matches_with_no_matching_mid_segment_rejects_early() {
+        assert!(!pattern_matches("A*B*C", "A1X1C"));
+        assert!(!pattern_matches("A**B**C", "A1C"));
+    }
+
+    #[test]
+    fn pattern_matches_treats_only_wildcards_as_global_match() {
+        assert!(pattern_matches("***", "ANY_VALUE"));
+        assert!(pattern_matches("**", "12345"));
+    }
+
+    #[test]
+    fn pattern_matches_skips_leading_wildcards_and_handles_missing_required_tail() {
+        assert!(pattern_matches("**OPENAI", "OPENAI_API_KEY"));
+        assert!(!pattern_matches("**OPENAI", "my-openai"));
+        assert!(!pattern_matches("OPENAI*TOKEN", "OPENAI"));
+        assert!(!pattern_matches("OPENAI*TOKEN", "OPENAI--TOKEN--END"));
+    }
+
+    #[test]
+    fn pattern_matches_rejects_fixed_prefix_mismatch() {
+        assert!(!pattern_matches("OPENAI_*", "GITHUB_TOKEN"));
+    }
+
+    #[test]
+    fn pattern_matches_rejects_missing_segment_in_middle() {
+        assert!(!pattern_matches("A*B*C", "AxxCyy"));
+        assert!(!pattern_matches("A*B*B", "AxxByy"));
+    }
+
+    #[test]
+    fn pattern_matches_handles_only_trailing_and_leading_wildcards_with_tail_rules() {
+        assert!(pattern_matches("A*", "AXYZ"));
+        assert!(!pattern_matches("A*", "BA"));
+        assert!(pattern_matches("*Z", "AZ"));
+        assert!(pattern_matches("*Z", "ZA"));
+        assert!(pattern_matches("*Z", "AZA"));
+    }
+
+    #[test]
+    fn pattern_matches_with_interior_wildcard_respects_tail_anchor() {
+        assert!(pattern_matches("A*B", "A1B"));
+        assert!(!pattern_matches("A*B", "A1B2"));
+        assert!(!pattern_matches("A*B", "AB2"));
+    }
+
+    #[test]
+    fn pattern_matches_handles_leading_wildcard_without_prefix() {
+        assert!(pattern_matches("*SERVICE", "API_SERVICE"));
+        assert!(pattern_matches("*SERVICE", "SERVICE"));
+        assert!(pattern_matches("*_SERVICE", "API_SERVICE"));
+        assert!(!pattern_matches("*_SERVICE", "SERVICE_TOKEN"));
+    }
+
+    #[test]
+    fn pattern_matches_handles_missing_wildcard_segment_with_tail_anchor() {
+        assert!(pattern_matches("A**B*", "AxyB"));
+        assert!(pattern_matches("A**B*", "A--B--tail"));
+        assert!(!pattern_matches("A**B*", "A--C"));
+    }
+
+    #[test]
+    fn pattern_matches_empty_pattern_only_matches_empty_value() {
+        assert!(pattern_matches("", ""));
+        assert!(!pattern_matches("", "x"));
+    }
+
+    #[test]
+    fn pattern_matches_pattern_star_is_global_match() {
+        assert!(pattern_matches("*", "anything"));
+        assert!(pattern_matches("**", ""));
+    }
+
+    #[test]
+    fn pattern_matches_handles_leading_and_trailing_wildcards_together() {
+        assert!(pattern_matches("*SERVICE*", "API_SERVICE"));
+        assert!(pattern_matches("A**A*", "AANYA"));
+        assert!(!pattern_matches("A**A*", "AONLY"));
+    }
+
+    #[test]
+    fn pattern_matches_handles_trailing_global_segment_and_tail_mismatch() {
+        assert!(pattern_matches("**TOKEN", "prefix_TOKEN"));
+        assert!(!pattern_matches("**TOKEN", "token_prefix"));
+        assert!(pattern_matches("A**", "A"));
+        assert!(!pattern_matches("A**", "BA"));
+    }
+
+    #[test]
+    fn pattern_matches_without_wildcards_falls_back_to_exact_match() {
+        assert!(pattern_matches("EXACT", "EXACT"));
+        assert!(!pattern_matches("EXACT", "EXACT_SUFFIX"));
+        assert!(!pattern_matches("EXACT", ""));
+    }
+
+    #[test]
+    fn pattern_matches_starts_with_wildcard_can_skip_implicit_prefix_segments() {
+        assert!(pattern_matches("***SERVICE", "API_SERVICE"));
+        assert!(!pattern_matches("*SERVICE", "OPENAI"));
+    }
+
+    #[test]
+    fn pattern_matches_requires_prefix_match_without_wildcard_prefix() {
+        assert!(pattern_matches("PROD_*", "PROD_KEY"));
+        assert!(!pattern_matches("PROD_*", "DEV_PROD_KEY"));
+    }
+
+    #[test]
+    fn pattern_matches_starting_wildcard_without_first_segment_falls_back_to_tail_match() {
+        assert!(pattern_matches("**TOKEN", "X_TOKEN"));
+        assert!(pattern_matches("***TOKEN", "TOKEN"));
+        assert!(!pattern_matches("**TOKEN", "TOK"));
+    }
+
+    #[test]
+    fn pattern_matches_respects_trailing_wildcard_anchor_behavior() {
+        assert!(pattern_matches("A*B*", "AxxB"));
+        assert!(pattern_matches("A*B*", "AxxByy"));
+        assert!(!pattern_matches("A*B*", "AxxC"));
+    }
+
+    #[test]
+    fn pattern_matches_supports_redundant_wildcards_and_floating_segments() {
+        assert!(pattern_matches("***TOKEN***VALUE", "MY_TOKEN__VALUE"));
+        assert!(!pattern_matches("***TOKEN***VALUE", "TOKEN"));
+        assert!(pattern_matches("A**B**C**", "A-anything-B-something-C"));
+        assert!(!pattern_matches("A**B**C**", "A--C--"));
     }
 }

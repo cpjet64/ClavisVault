@@ -339,6 +339,7 @@ mod tests {
         assert!(policy.is_signer_trusted("kid-1", "pubkey-A"));
         assert!(policy.signer_matches_existing_key("kid-2", "pubkey-B"));
         assert!(!policy.signer_matches_existing_key("kid-2", "other"));
+        assert!(!policy.signer_matches_existing_key("missing", "none"));
         assert!(!policy.is_signer_trusted("missing", "none"));
 
         policy.remove_unknown_signer("kid-1");
