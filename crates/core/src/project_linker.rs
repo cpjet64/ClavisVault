@@ -335,6 +335,19 @@ mod tests {
     }
 
     #[test]
+    fn create_watcher_with_single_valid_watch_folder_is_ok() {
+        let root = temp_dir("project-linker-valid-single-watch");
+        fs::create_dir_all(&root).expect("watch root creation should work");
+
+        let mut linker = ProjectLinker::default();
+        linker.add_watch_folder(&root);
+
+        let (_watcher, _rx) = linker
+            .create_watcher()
+            .expect("watcher creation should work for a valid directory");
+    }
+
+    #[test]
     fn project_linker_builds_watcher_config_via_default_factory() {
         let _ = ProjectLinker::watcher_config();
     }

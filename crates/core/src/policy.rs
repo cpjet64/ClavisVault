@@ -656,6 +656,12 @@ max_age_days = 30
     }
 
     #[test]
+    fn pattern_matches_non_wildcard_prefix_branch_consumes_first_segment() {
+        assert!(pattern_matches("prefix*tail", "prefix-anything-tail"));
+        assert!(!pattern_matches("prefix*tail", "prefix-anything-nope"));
+    }
+
+    #[test]
     fn pattern_matches_starting_wildcard_without_first_segment_falls_back_to_tail_match() {
         assert!(pattern_matches("**TOKEN", "X_TOKEN"));
         assert!(pattern_matches("***TOKEN", "TOKEN"));
