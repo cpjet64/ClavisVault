@@ -105,3 +105,4 @@ prompts/
 .worktree*/
 .codex_worktrees/
 security/dependency-graph*.json
+coverage-report.json
