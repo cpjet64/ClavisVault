@@ -1,17 +1,26 @@
 # TODO / Plan
 
-## Task: Complete remaining unchecked execution items
+## Task: Regenerate canonical project documentation set
 
-- [x] Classify pre-existing dirty workspace into atomic change sets and clean generated artifacts.
-- [x] Audit every unchecked item in `MASTER-CHECKLIST.md` against code/tests and identify real gaps.
-- [x] Implement/fix remaining gaps with minimal reversible edits and add/adjust tests as required.
-- [x] Update `MASTER-CHECKLIST.md` and `EXECUTION-PLAN.md` with current verified status notes.
+- [x] Read governance files (`AGENTS.md`) and available spec context (`legacy/docs/SPEC.md` after docs reset).
+- [x] Rebuild planning artifacts for this pass (`.AGENTS/todo.md` + `.AGENTS/plans` entry).
+- [x] Synthesize architecture and behavior details from all workspace crates (`core`, `desktop`, `server`, `relay`, `cli`) plus CI/release scripts.
+- [x] Generate fresh docs set in `docs/`:
+  - `README.md`
+  - `index.md`
+  - `SPEC.md`
+  - `ARCHITECTURE.md`
+  - `API.md`
+  - `TOOLING.md`
+  - `alerts.md`
+- [x] Restore root `README.md` as a docs pointer.
+- [x] Update `docs/PROGRESS.md` with completed generation log.
 - [x] Run `just ci-fast`.
 - [x] Run `just ci-deep`.
-- [x] Commit each verified change set locally (no push).
+- [ ] Commit verified documentation change set locally (no push).
 
 ## Review
 
-- Verified `just ci-fast` completion.
-- Ran `just ci-deep` before integration and resolved local gate blockers (security policy alignment + nextest retries for transient flakes).
-- Verified post-fix build/test/docs commands completed successfully.
+- `just ci-fast`: PASSED.
+- `just ci-deep`: PASSED.
+- Quality gates, coverage, security policy checks, and docs build completed successfully in this pass.

@@ -1,304 +1,154 @@
-# ClavisVault SPEC (v1.0 — February 19 2026)
+# ClavisVault SPEC (Current Implementation)
 
-## Project Overview
-ClavisVault (Latin “clavis” = key) is a small, cross-platform, Rust-native desktop application whose sole purpose is to securely store, manage, and apply developer environment variables and API keys.  
-It completely eliminates the need to commit `.env` files or scatter keys across projects.
+Last regenerated: 2026-02-26
 
-Core requirements (non-negotiable):
-- Written in Rust 2024 edition, minimum rust-version = 1.93.1.
-- Single large Cargo workspace monorepo.
-- Build each crate independently (core first, then desktop, server, relay, cli).
-- Zero network capability in the desktop app except for the controlled updater and the optional P2P tunnel (all other traffic is forbidden).
-- Complete end-to-end encryption at rest and in transit.
-- Master-password / security-key protected vault.
-- Runs in background with system tray icon.
-- Auto-updater that polls GitHub + separate critical alerts system.
-- Agents.md and OpenClaw support with project linker and automatic safe updates.
-- Server version (headless) with direct encrypted P2P tunnel (QUIC + Noise).
-- Optional public relay (NAT hole-punching) for users who cannot do direct connections.
-- Extreme testing: coverage gates, fuzzing, file-safety guarantees, security invariants enforced in CI.
+## 1. Overview
+ClavisVault is a Rust 2024 workspace for secure developer secret management across desktop, CLI, and optional remote sync endpoints.
 
-Project name (must be unused): ClavisVault  
-GitHub: github.com/cpjet64/ClavisVault
+Workspace members:
+- `crates/core`
+- `crates/desktop`
+- `crates/desktop/src-tauri`
+- `crates/server`
+- `crates/relay`
+- `crates/cli`
 
-## 1. Monorepo Layout
-clavisvault/
-├── Cargo.toml                  # workspace
-├── rust-toolchain.toml         # channel = "1.93.1"
-├── .github/workflows/ci.yml
-├── crates/
-│   ├── core/                   # lib
-│   ├── desktop/                # Tauri 2 binary
-│   ├── server/                 # headless binary
-│   ├── relay/                  # headless relay binary
-│   └── cli/                    # optional clavis CLI
-├── assets/                     # icon.png (1024×1024), icon.icns, icon.ico
-├── docs/
-│   ├── SPEC.md                 # this file
-│   ├── alerts.md               # YAML frontmatter alerts
-├── CHANGELOG.md                # repository changelog (root)
-├── relay-public/               # Docker + systemd for hosted relay
-└── scripts/
-    ├── build-all.sh
-    ├── build-all.ps1
-    ├── release.sh
-    └── release.ps1
+Non-negotiable implementation invariants:
+- `#![forbid(unsafe_code)]` across security-critical binaries/libraries.
+- Vault persistence is encrypted-at-rest (Argon2id + ChaCha20Poly1305).
+- Secret-bearing file writes follow backup then atomic replacement semantics.
+- Managed file sections (`AGENTS.md`, `openclaw.json` region) are deterministic and bounded.
+- Relay is signaling-only and never decrypts end-to-end vault payloads.
 
-Root Cargo.toml (exact)
-[workspace]
-members = ["crates/*", "crates/desktop/src-tauri"]
-resolver = "3"
+## 2. Core Crypto and Vault Model
+`crates/core` defines canonical data contracts in `src/types.rs`:
+- `VaultData { version, salt, keys }`, with current `version = 2` and migration from legacy data.
+- `KeyEntry` includes metadata for lifecycle and rotation (`created_at`, `expires_at`, `rotation_period_days`, `warn_before_days`, `last_rotated_at`, `owner`).
+- `EncryptedVault` / `EncryptedHeader` frame MessagePack serialized encrypted payloads.
+- `MasterKey` zeroizes internal bytes on drop.
 
-[workspace.package]
-version = "0.1.0"
-edition = "2024"
-rust-version = "1.93.1"
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/cpjet64/ClavisVault"
+KDF + encryption parameters in `src/encryption.rs`:
+- Argon2id (`memory_cost=19456 KiB`, `time_cost=4`, `parallelism=1`, `32-byte output`).
+- ChaCha20Poly1305 with random 12-byte nonce per encryption.
+- Plaintext serialization buffers are zeroized after encrypt/decrypt.
 
-[workspace.dependencies]
-# Core
-chacha20poly1305 = { version = "0.10", features = ["std"] }
-argon2 = { version = "0.5", features = ["std"] }
-zeroize = "1.8"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-rmp-serde = "1.3"
-chrono = { version = "0.4", features = ["serde"] }
-dirs = "6.0"
-notify = { version = "8.0", features = ["macos_fsevent"] }
-anyhow = "1.0"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-tokio = { version = "1.43", features = ["full"] }
+## 3. File Safety Contract
+`src/safe_file.rs` provides `SafeFileOps`:
+- `backup(path)`
+- `restore(backup)`
+- `atomic_write(path, data)`
 
-# Desktop / Tauri
-tauri = "2"
-tauri-plugin-updater = "2"
-tauri-plugin-single-instance = "2"
-tauri-plugin-shell = "2"
-tauri-plugin-dialog = "2"
-tauri-plugin-store = "2"
-tauri-plugin-biometric = "2"          # 2026 version
-tauri-plugin-clipboard = "2"
+`LocalSafeFileOps` ensures:
+- backup creation before mutation,
+- same-directory temp-file write + rename replace,
+- rollback/restore on write failure,
+- backup retention trimming (default 10 backups).
 
-# Network / P2P
-quinn = "0.11"
-snow = "0.9"
-stun = "0.7"
+## 4. Managed File and Linker Flows
+- `src/agents_updater.rs`: updates only text between:
+  - `<!-- CLAVISVAULT-START -->`
+  - `<!-- CLAVISVAULT-END -->`
+- `src/openclaw.rs`: parses JSON/JSONC, deep-merges `clavisVault` key, preserves/sets managed env comment marker.
+- `src/project_linker.rs`: recursively discovers and syncs managed files under configured folders, with watcher debounce.
 
-# Others
-rand = "0.8"
-base32 = "0.2"
-sha2 = "0.10"
+## 5. Policy, Rotation, Audit, Recovery
+- Policy: `src/policy.rs` loads TOML rules and emits `PolicyViolation` list.
+- Rotation: `src/rotation.rs` reports `Healthy | Due | Expired | NoPolicy` and applies secure metadata updates in `rotate_key`.
+- Audit: `src/audit_log.rs` maintains tamper-evident chain entries and periodic checkpoints with integrity verification.
+- Recovery: `src/recovery.rs` runs structural recovery drills (vault read/decode, backup presence, optional export verification).
 
-## 2. Core Crate (crates/core) — Pure Business Logic
-Types
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct KeyEntry {
-    pub name: String,           // UPPER_SNAKE_CASE
-    pub description: String,
-    pub tags: Vec<String>,
-    pub last_updated: chrono::DateTime<chrono::Utc>,
-}
+## 6. Desktop Application
+`crates/desktop` is split into UI + backend:
+- React 19 frontend (`src/`) with Zustand and TanStack Query.
+- Tauri backend (`src-tauri/src/lib.rs`) hosting runtime state and command handlers.
 
-#[derive(Serialize, Deserialize)]
-pub struct VaultData {
-    pub version: u32,           // 1
-    pub salt: [u8; 16],
-    pub keys: std::collections::HashMap<String, KeyEntry>,
-}
+Key command groups:
+- vault lifecycle: bootstrap, unlock, lock, password rotation.
+- key operations: list/upsert/delete/copy/export/import/rotate.
+- linker/remotes: sync, pair, list, remove, revoke.
+- observability: audit list/verify, recovery drill, rotation findings.
+- operational: settings, shell hooks, update checks, alert acknowledgement.
 
-pub struct EncryptedVault { /* path, ciphertext, header */ }
+## 7. Server and Relay
+Server (`crates/server`):
+- headless QUIC endpoint (`default 0.0.0.0:51821`) with Noise_XX framing.
+- pairing challenge with TTL and checksum.
+- scoped signed token issuance (`push`, `erase`, `revoke`) and revocation list.
+- supports authenticated full-vault push and explicit remote erase/revoke commands.
 
-Encryption (must never be violated)
-- Argon2id (time_cost=4, memory_cost=19456 KiB, parallelism=1)
-- ChaCha20Poly1305, 12-byte random nonce per save
-- Master key derived once per unlock session
-- zeroize::Zeroize on every secret on drop
-- Never write plaintext to disk
+Relay (`crates/relay`):
+- UDP datagram forwarding (`default 0.0.0.0:51820`).
+- protocol gate: `CLAVISRL` magic + version + declared payload length + sender hash.
+- source IP, peer, and source-peer rate limiting.
+- target-hint routing and bounded fanout.
 
-SafeFileOps trait (critical)
-pub trait SafeFileOps {
-    fn backup(&self, path: &Path) -> Result<Backup>;   // keeps ≤10 timestamped .bak
-    fn restore(&self, backup: Backup) -> Result<()>;
-    fn atomic_write(&self, path: &Path, data: &[u8]) -> Result<()>;
-}
-Every agents.md / openclaw.json operation: backup → parse → replace guarded section → atomic_write.
+## 8. CLI Surface
+`crates/cli/src/main.rs` provides:
+- `env-load`
+- `add-key`, `list`, `remove-key|rm-key`, `rotate-key`
+- `policy check`
+- `audit verify`
+- `recovery-drill`
+- `shell-hook`
 
-Agents.md Updater
-Exact markers:
-<!-- CLAVISVAULT-START -->
-## ClavisVault Managed Keys
-**Last updated:** 2026-02-19 10:45:12 UTC
+CLI authentication supports password, session token file, and guarded legacy token compatibility paths.
 
-### API Keys
-- `OPENAI_API_KEY` – …
-<!-- CLAVISVAULT-END -->
-Only replace between markers. If absent, append at end.
+## 9. CI, Quality Gates, and Release
+Local recipes are in `Justfile`:
+- `just ci-fast`: hygiene + fmt + lint + build + quick tests.
+- `just ci-deep`: `ci-fast` + full tests + coverage + security + docs.
 
-OpenClaw Support
-Deep-merge into ~/.openclaw/openclaw.json (or user path) under "clavisVault" key + JSONC comment block in env.
+CI (`.github/workflows/ci.yml`) enforces:
+- matrix check job (Windows 2022, macOS 15, Ubuntu 24.04),
+- coverage gate for `clavisvault-core` (>=95%),
+- audit + deny checks,
+- extreme smoke script,
+- desktop GUI E2E on Windows.
 
-ProjectLinker
-- Explicit files list
-- Recursive folder watch (notify::RecommendedWatcher, 800 ms debounce)
-- On any vault change → update all linked files
-- Auto-add new **/agents.md discovered in watched folders
+Release tooling:
+- `scripts/release.ps1`
+- `scripts/release.sh`
 
-ShellInjector
-- Generates sourceable hooks for bash/zsh/fish/pwsh
-- clavis env-load command (prompts password or uses cached session token)
+## 10. Architecture Diagram
+```mermaid
+flowchart LR
+  subgraph UI[Desktop UI - React]
+    A[Vault / Agents / Remotes / Settings]
+  end
 
-Platform trait
-pub trait Platform {
-    fn data_dir() -> PathBuf;
-    fn config_dir() -> PathBuf;
-    fn set_autostart(enabled: bool, minimized: bool) -> Result<()>;
-    fn create_tray_icon(...) -> Result<()>;
-}
-Implementations for Windows, macOS, Linux.
+  subgraph Tauri[Desktop Backend - Tauri]
+    B[Command Handlers]
+    C[VaultRuntime + Settings + Audit]
+  end
 
-Polish features in core
-- AuditLog (every operation: unlock, copy, push, file update)
-- EncryptedExport (AES-256 ZIP with separate passphrase)
-- Idle auto-lock timer support
-- Biometric unlock hook
-- Rate-limit failed password attempts (exponential backoff, wipe after 10 fails with warning)
+  subgraph Core[clavisvault-core]
+    D[types + encryption + safe_file]
+    E[policy + rotation + audit + recovery]
+    F[agents/openclaw/project_linker]
+  end
 
-## 3. Desktop Crate (Tauri 2.x)
-Modern glassmorphic UI (React 19 + TS + Tailwind + shadcn/ui + lucide-react + Zustand + TanStack Query).  
-Dark mode default.
+  subgraph Remote[Remote Components]
+    G[clavisvault-server\nQUIC + Noise]
+    H[clavisvault-relay\nsignaling only]
+  end
 
-UI Tabs
-- Vault: searchable table, add/edit modal (strength meter), groups, bulk export
-- Agents / OpenClaw: linked files + watch folders, “Update Now”
-- Remotes: toggle “Enable Server Sync” (default OFF). When ON → new menu bar “Remotes” with “Add New” and one button per server.  
-  - Add New supports IP:port or hostname + pairing code + relay fingerprint
-  - List shows server name, key count, last sync
-  - Remove server = remote erase vault + remove locally
-- Settings: master password change, idle auto-lock (10 min default), launch on startup + minimized, update channel, relay endpoint (public or custom), clear clipboard after 30 s, audit log viewer, theme/accent picker, global Cmd/Ctrl+K search, biometric toggle, wipe-after-10-fails warning
+  subgraph CLI[clavis CLI]
+    I[local ops + policy/audit/recovery]
+  end
 
-Tray
-Right-click: Open | Lock Vault | Check Updates | Quit  
-Status dot: green(unlocked)/yellow(locked)/red(error)
+  A -->|invoke| B
+  B --> C
+  C --> D
+  C --> E
+  C --> F
+  I --> D
+  I --> E
+  B -->|paired sync| G
+  G <-->|forwarded transport hints| H
+```
 
-Auto-Updater
-- tauri-plugin-updater + GitHub fallback
-- Also fetches docs/alerts.md
-- alerts.md format (YAML frontmatter per version):
-  version: "0.1.5"
-  critical: true
-  message: "CRITICAL: CVE-2026-XXXX — update immediately"
-- Critical alert → non-dismissible modal until updated.
-
-Security
-- Vault lives only in tauri::State<DecryptedVault>
-- No plaintext over invoke except explicit single-key copy (auto-clear clipboard)
-- Desktop webview CSP connect-src is restricted to `'self'`; forbid `https:`, `http:`, and `*` in renderer policy to prevent uncontrolled outbound webview traffic.
-- Updater and P2P tunnel networking remain explicit Rust-side capabilities and are not expanded via frontend CSP.
-
-P2P Client
-QUIC + Noise_XX handshake over direct UDP or relay. Relay only does signalling.
-
-## 4. Server Crate (headless)
-clavisvault-server [--data-dir /var/lib/clavisvault]
-
-- First run: prints one-time 8-char base32 pairing code + checksum (5 min TTL)
-- After pairing: stores ed25519-signed JWT (90 days)
-- Own master password (clavisvault-server set-password)
-- Only accepts full-vault push over the encrypted tunnel
-- Overwrites local vault, returns SHA-256 ACK
-- Accepts full-vault push over the encrypted tunnel and an explicit authenticated `erase` remote command.
-- Desktop remains the source of truth for key edits and routine vault mutation flows.
-- Runs as tokio daemon, ready for systemd/Docker
-
-## 5. Relay Crate
-Listens on UDP 51820 (QUIC).  
-Only forwards packets starting with magic b"CLAVISRL" + version 1 + sender pubkey hash.  
-Rate-limit 50 pkt/s per IP.  
-Never decrypts or stores payload.  
-Pure signalling + hole-punch helper.  
-Trust boundary: relay must be operated as trusted infrastructure because it observes packet metadata and can act as a forwarding path.
-Public instance: relay.clavisvault.app:51820  
-Self-host option fully supported.
-
-Custom protocol (anti-abuse)
-Every packet:  
-[8] CLAVISRL | [1] version | [2] len | [32] sender_pubkey_hash | [payload]
-
-Relay deployment guidance:
-- `clavisvault-relay` is unauthenticated and performs protocol-level validation only.
-- It cannot decrypt any end-to-end payload content, but can observe:
-  - sender source endpoint and source packet rates
-  - 32-byte sender hash and any target-hash hints in payload preamble
-  - total packet volume and fanout behavior
-- Production relays must be treated as trusted network infrastructure.
-- For stricter environments, operators should limit relay exposure and rotate relay hostname/IP as part of operational hardening.
-
-## 6. Additional Polish (implemented in desktop + core)
-- Launch on startup + launch minimized
-- Idle auto-lock (configurable)
-- Biometric unlock (where supported)
-- Audit log viewer
-- Encrypted vault export/import
-- Global quick-search (Cmd/Ctrl+K)
-- Clear clipboard after 30 s
-- Theme + accent color picker
-- Rate-limit password attempts + wipe warning
-- Offline-first (only updater/relay need net)
-- Single-instance enforcement
-
-## 7. Testing Requirements (must pass before any release)
-- Coverage gate: ≥95% on core (using project coverage tooling)
-- 10 000 encryption round-trips
-- File-safety tests (backup/restore on every write, corrupt simulation)
-- 50+ agents.md / openclaw fixtures
-- Full P2P integration (direct + relay) with MITM simulation (must fail)
-- Updater + alerts parsing with wiremock
-- Matrix: Windows 11, macOS 15, Ubuntu 24.04
-- cargo fuzz 24 h on parsers & crypto
-- cargo audit, cargo deny, clippy -D warnings
-
-## 8. Distribution & Release
-- GitHub Releases with .dmg, .exe, .AppImage, server & relay binaries
-- Docker images for relay & server
-- `docs/alerts.md` and root `CHANGELOG.md` are always present and kept current
-
-Security Invariants (audited in every CI run)
-1. No plaintext ever written to disk.
-2. Master key never persisted.
-3. Every file touch is backed up first.
-
-## 9. Post-v1 Security and Operations Enhancements
-- Vault schema version is now `2` and supports backward migration from `v1` on successful unlock.
-- `KeyEntry` now includes rotation metadata:
-  - `created_at`, `expires_at`, `rotation_period_days`, `warn_before_days`, `last_rotated_at`, `owner`
-- Export manifest format `v2` is signed and includes:
-  - `payload_sha256`, `key_count`, `vault_version`, `signer_key_id`, `signer_public_key`, `signature`
-- Legacy export manifest imports are policy-gated (`allow` / `warn` / `block`) via `ExportSignerTrustPolicy.legacyImportMode`; desktop settings default to `warn`, hardened deployments can set `block`.
-- Desktop settings include `hardwareBackedUnlockEnabled` and alert acknowledgement state.
-- Tamper-evident audit chain verification command is exposed to desktop and CLI.
-- New desktop commands:
-  - `verify_audit_chain`
-  - `list_rotation_findings`
-  - `rotate_key`
-  - `revoke_remote_session`
-  - `run_recovery_drill`
-  - `acknowledge_alert`
-- New CLI commands:
-  - `policy check`
-  - `audit verify`
-  - `recovery-drill`
-  - `rotate-key`
-- Recovery drill export verification requires a non-empty export passphrase when `export_path` is provided; missing passphrases are reported as explicit verification failures.
-- CLI `env-load` session token TTL is bounded (`1..=1440` minutes) to prevent extreme timestamp math and preserve deterministic token lifetime semantics.
-- Policy validation treats `max_age_days` as secret-lifecycle age (rotation/creation anchor), not mutable metadata edit time.
-- Remote trust policy metadata is tracked per remote:
-  - `permissions`, `session_ttl_seconds`, `revoked_at`, `requires_repairing`
-- Server token payload now carries `jti`, `scp`, and `rid`; server validates scope and supports explicit session revoke command.
-4. Only guarded sections in agents.md / openclaw.json are modified.
-5. Relay cannot read any traffic.
-6. Desktop has zero network except updater & P2P tunnel (firewall-friendly), and webview CSP connect-src is limited to `'self'` with no wildcard or scheme-wide sources.
-
-This SPEC is complete and exhaustive. Any implementation that deviates must be rejected.
+## 11. Trust Boundary Notes
+- Core handles encryption, policy, and file-safety semantics and is the primary security boundary.
+- Desktop runtime keeps decrypted vault material in-memory only during unlocked sessions.
+- Server must be treated as trusted infrastructure for state custody.
+- Relay is protocol-limited but metadata-observable infrastructure.
