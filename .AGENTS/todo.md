@@ -1,20 +1,20 @@
 # TODO / Plan
 
-## Task: Upgrade dependencies/tooling (dependency-upgrader workflow)
+## Task: Performance optimization pass (openclaw comment stripping)
 
-- [x] Load dependency-upgrader skill references and supporting scripts.
-- [x] Re-bootstrap Windows native build environment (`ensure-vcvars.ps1`).
-- [x] Record baseline inventory and risk plan in `docs/dependency-upgrade-report.md`.
-- [x] Plan and execute conservative upgrade waves (security-first, then patch/minor).
-- [x] Validate each wave with required quality/security gates.
-- [x] Commit each verified wave locally (no push).
-- [x] Finalize report with outcomes, residual risk, and rollback notes.
+- [x] Confirm remaining unchecked items in `MASTER-CHECKLIST.md` and `execution-plan.md`.
+- [x] Identify hotspot candidate and baseline command.
+- [x] Implement low-risk optimization in `crates/core/src/openclaw.rs`.
+- [x] Run targeted tests for affected module (`openclaw::tests::*`).
+- [x] Run integration quality gates (`just ci-fast`, `just ci-deep`).
+- [ ] Commit verified change set locally (no push).
 
-## Review
+## Review (in progress)
 
-- Conservative dependency wave completed without Rust lockfile churn.
-- Desktop Node lockfile updated with compatible package refresh (`crates/desktop/package-lock.json`).
-- Validation passed:
+- Current checklist state: no remaining unchecked items in `MASTER-CHECKLIST.md` or `execution-plan.md`.
+- Optimization applied to `strip_line_comments`: replaced pre-collected `Vec<char>` scan with streaming `chars().peekable()` scan and preallocated output capacity.
+- Benchmark method: `cargo test -q -p clavisvault-core strip_line_comments_remains_accurate_after_multiple_comment_blocks --release -- --exact` (5 runs each, warm-window comparison).
+- Warm median changed from `1045.63 ms` (pre) to `927.74 ms` (post), roughly `11.27%` faster on sampled runs.
+- Full verification passed:
   - `just ci-fast`
   - `just ci-deep`
-- Security gates remained warning-only where previously allowlisted (`cargo audit`), and `npm audit --omit=dev` reported `0 vulnerabilities`.

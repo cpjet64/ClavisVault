@@ -118,15 +118,12 @@ fn parse_json_or_jsonc(content: &str) -> Result<Value> {
 
 #[cfg_attr(test, inline(never))]
 fn strip_line_comments(content: &str) -> String {
-    let mut out = String::new();
+    let mut out = String::with_capacity(content.len());
     let mut in_string = false;
     let mut escaped = false;
-    let chars: Vec<char> = content.chars().collect();
-    let mut i = 0;
+    let mut chars = content.chars().peekable();
 
-    while i < chars.len() {
-        let c = chars[i];
-
+    while let Some(c) = chars.next() {
         if in_string {
             out.push(c);
             if escaped {
@@ -136,26 +133,27 @@ fn strip_line_comments(content: &str) -> String {
             } else if c == '"' {
                 in_string = false;
             }
-            i += 1;
             continue;
         }
 
         if c == '"' {
             in_string = true;
             out.push(c);
-            i += 1;
             continue;
         }
 
-        if c == '/' && i + 1 < chars.len() && chars[i + 1] == '/' {
-            while i < chars.len() && chars[i] != '\n' {
-                i += 1;
+        if c == '/' && chars.peek().is_some_and(|next| *next == '/') {
+            let _ = chars.next();
+            for next in chars.by_ref() {
+                if next == '\n' {
+                    out.push('\n');
+                    break;
+                }
             }
             continue;
         }
 
         out.push(c);
-        i += 1;
     }
 
     out
