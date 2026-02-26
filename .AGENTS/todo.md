@@ -11,7 +11,7 @@
 - [x] Re-run coverage and iterate until no meaningful gain remains.
 - [x] Add detailed inline comments for any truly uncoverable code.
 - [x] Update `docs/coverage-report.md` with before/after metrics and evidence.
-- [ ] Commit each verified coverage change set locally (no push).
+- [x] Commit each verified coverage change set locally (no push).
 
 ## Review (in progress)
 
@@ -41,3 +41,5 @@
 - Required integration gates (pre-commit):
   - `just ci-fast`: PASSED
   - `just ci-deep`: PASSED
+- Local commit completed:
+  - `490355d` `test[core]: cover residual policy and watcher branches`
